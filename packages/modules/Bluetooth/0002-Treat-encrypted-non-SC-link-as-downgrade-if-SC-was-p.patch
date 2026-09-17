@@ -1,0 +1,50 @@
+From 3d5457ffe7801e2ffb1f8912acb9fd1ec2fbaef1 Mon Sep 17 00:00:00 2001
+From: Brian Delwiche <delwiche@google.com>
+Date: Wed, 6 May 2026 15:16:02 -0700
+Subject: [PATCH 02/10] Treat encrypted non-SC link as downgrade if SC was
+ previously supported.
+
+If both host and controller previously supported Secure Connections, and
+the current link is encrypted but not using a Secure Connections link
+key type, this is now considered a downgrade. This can happen if a
+malicious client forces legacy authentication and later claims to
+support SC.
+
+Bug: 455566331
+Bug: 494009564
+Flag: com.android.bluetooth.flags.btsec_check_implicit_encryption_downgrade
+Test: mmm packages/modules/Bluetooth
+Tag: #security
+
+Change-Id: I504192912f50bbefb6b7cf3133c1512b55413c35
+(cherry picked from commit 13872784a01e3d244ef955465515187c42bf293d)
+---
+ system/stack/btm/btm_sec.cc | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/system/stack/btm/btm_sec.cc b/system/stack/btm/btm_sec.cc
+index 7a03d70f1c1..a48759d8b55 100644
+--- a/system/stack/btm/btm_sec.cc
++++ b/system/stack/btm/btm_sec.cc
+@@ -3356,6 +3356,18 @@ void btm_sec_encrypt_change(uint16_t handle, tHCI_STATUS status, uint8_t encr_en
+     if (encr_enable == HCI_ENCRYPT_MODE_ON) {
+       encryption_algo =
+               (transport == BT_TRANSPORT_LE) ? EncryptionAlgorithm::AES : EncryptionAlgorithm::E0;
++
++      // Claiming HCI_ENCRYPT_MODE_ON while using BR/EDR transport implies using E0 encryption.
++      // If the stored properties indicate that we should be using AES-CCM (i.e. that we were using
++      // Secure Connections mode previously), then this is a downgrade.
++      if (transport == BT_TRANSPORT_BR_EDR) {
++        if (btm_sec_is_enc_algo_downgrade(handle, 0, 0)) {
++          acl_set_disconnect_reason(HCI_ERR_HOST_REJECT_SECURITY);
++          btm_sec_send_hci_disconnect(p_device, HCI_ERR_AUTH_FAILURE, handle,
++                                      "attempted to downgrade from Secure Connections mode");
++          return;
++        }
++      }
+     } else if (encr_enable == HCI_ENCRYPT_MODE_ON_BR_EDR_AES_CCM) {
+       encryption_algo = EncryptionAlgorithm::AES;  // this is for BR/EDR
+       if (transport == BT_TRANSPORT_LE) {
+-- 
+2.55.0
+

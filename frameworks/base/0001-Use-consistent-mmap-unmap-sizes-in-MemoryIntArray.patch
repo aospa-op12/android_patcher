@@ -1,0 +1,369 @@
+From 6f753bd5346c0f03c7c2fdbb48377507615b7f5d Mon Sep 17 00:00:00 2001
+From: Jared Duke <jdduke@google.com>
+Date: Tue, 14 Apr 2026 01:18:50 +0000
+Subject: [PATCH 01/27] Use consistent mmap/unmap sizes in MemoryIntArray
+
+Ensure mmap/munmap pairings for MemoryIntArray always use the same size
+argument, rather than re-querying the ashmem size region before unmap.
+This prevents any kind of changes to the underlying fd from bleeding
+into the size argument used in the munmap call.
+
+A longer term fix will migrate this class to be implemented purely in
+terms of SharedMemory and existing Java primitives.
+
+Bug: 498720726
+Test: atest FrameworksUtilTests:android.util.MemoryIntArrayTest
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:daf86f667f9d8922af019155f8a672cca88c6f71
+Merged-In: Id6ff65e9fdbb2d98974f9b78c73f005c6dbf9867
+Change-Id: Id6ff65e9fdbb2d98974f9b78c73f005c6dbf9867
+---
+ core/java/android/util/MemoryIntArray.java    | 14 ++--
+ core/jni/android_util_MemoryIntArray.cpp      | 32 +++++----
+ .../jni/android_util_MemoryIntArrayTest.cpp   | 25 +++++++
+ core/tests/utiltests/jni/registration.cpp     | 33 +++++++++
+ .../src/android/util/MemoryIntArrayTest.java  | 71 +++++++++++++++++++
+ 5 files changed, 158 insertions(+), 17 deletions(-)
+
+diff --git a/core/java/android/util/MemoryIntArray.java b/core/java/android/util/MemoryIntArray.java
+index 790b5273083b..9ccfcabbc9eb 100644
+--- a/core/java/android/util/MemoryIntArray.java
++++ b/core/java/android/util/MemoryIntArray.java
+@@ -50,6 +50,8 @@ import java.util.UUID;
+  *
+  * @hide
+  */
++// TODO(b/498720726): Refactor this class to be implemented entirely in terms of SharedMemory,
++// instead of manually managing the FD and ashmem regions using JNI.
+ public final class MemoryIntArray implements Parcelable, Closeable {
+     private static final String TAG = "MemoryIntArray";
+ 
+@@ -76,10 +78,10 @@ public final class MemoryIntArray implements Parcelable, Closeable {
+         mIsOwner = true;
+         final String name = UUID.randomUUID().toString();
+         mFd = nativeCreate(name, size);
+-        mMemoryAddr = nativeOpen(mFd, mIsOwner);
+         // Note that we use the effective size after allocation, rather than the provided size,
+         // preserving compat with the original behavior. In practice these should be equivalent.
+         mSize = nativeSize(mFd);
++        mMemoryAddr = nativeOpen(mFd, mIsOwner, mSize);
+         mCloseGuard.open("MemoryIntArray.close");
+     }
+ 
+@@ -90,8 +92,8 @@ public final class MemoryIntArray implements Parcelable, Closeable {
+             throw new IOException("No backing file descriptor");
+         }
+         mFd = pfd.detachFd();
+-        mMemoryAddr = nativeOpen(mFd, mIsOwner);
+         mSize = nativeSize(mFd);
++        mMemoryAddr = nativeOpen(mFd, mIsOwner, mSize);
+         mCloseGuard.open("MemoryIntArray.close");
+     }
+ 
+@@ -152,7 +154,7 @@ public final class MemoryIntArray implements Parcelable, Closeable {
+     @Override
+     public void close() throws IOException {
+         if (!isClosed()) {
+-            nativeClose(mFd, mMemoryAddr);
++            nativeClose(mFd, mMemoryAddr, mSize);
+             mFd = -1;
+             mCloseGuard.close();
+         }
+@@ -232,8 +234,10 @@ public final class MemoryIntArray implements Parcelable, Closeable {
+     }
+ 
+     private native int nativeCreate(String name, int size);
+-    private native long nativeOpen(int fd, boolean owner);
+-    private native void nativeClose(int fd, long memoryAddr);
++    // The same explicit size should always be passed to nativeOpen() and nativeClose() to ensure
++    // consistency between mmap() and munmap().
++    private native long nativeOpen(int fd, boolean owner, int size);
++    private native void nativeClose(int fd, long memoryAddr, int size);
+     @FastNative
+     private native int nativeGet(long memoryAddr, int index);
+     @FastNative
+diff --git a/core/jni/android_util_MemoryIntArray.cpp b/core/jni/android_util_MemoryIntArray.cpp
+index 1b7208789fac..4f78b19ca1da 100644
+--- a/core/jni/android_util_MemoryIntArray.cpp
++++ b/core/jni/android_util_MemoryIntArray.cpp
+@@ -28,6 +28,16 @@ namespace android {
+ // Atomics should be safe to use across processes if they are lock free.
+ static_assert(std::atomic_int::is_always_lock_free, "atomic_int is not always lock free");
+ 
++static int arraySize(int nrElms)
++{
++    return sizeof(std::atomic_int) * nrElms;
++}
++
++static int arrayNrElms(int arraySize)
++{
++    return arraySize / sizeof(std::atomic_int);
++}
++
+ static jint android_util_MemoryIntArray_create(JNIEnv* env, jobject clazz, jstring name,
+         jint size)
+ {
+@@ -42,7 +52,7 @@ static jint android_util_MemoryIntArray_create(JNIEnv* env, jobject clazz, jstri
+     }
+ 
+     const char* nameStr = env->GetStringUTFChars(name, NULL);
+-    const int ashmemSize = sizeof(std::atomic_int) * size;
++    const int ashmemSize = arraySize(size);
+     int fd = ashmem_create_region(nameStr, ashmemSize);
+     env->ReleaseStringUTFChars(name, nameStr);
+ 
+@@ -60,9 +70,8 @@ static jint android_util_MemoryIntArray_create(JNIEnv* env, jobject clazz, jstri
+     return fd;
+ }
+ 
+-static jlong android_util_MemoryIntArray_open(JNIEnv* env, jobject clazz, jint fd,
+-    jboolean owner)
+-{
++static jlong android_util_MemoryIntArray_open(JNIEnv* env, jobject clazz, jint fd, jboolean owner,
++                                              jint size) {
+     if (fd < 0) {
+         jniThrowException(env, "java/io/IOException", "bad file descriptor");
+         return -1;
+@@ -73,7 +82,7 @@ static jlong android_util_MemoryIntArray_open(JNIEnv* env, jobject clazz, jint f
+         return -1;
+     }
+ 
+-    int ashmemSize = ashmem_get_size_region(fd);
++    int ashmemSize = arraySize(size);
+     if (ashmemSize <= 0) {
+         jniThrowException(env, "java/io/IOException", "bad ashmem size");
+         return -1;
+@@ -103,7 +112,6 @@ static jlong android_util_MemoryIntArray_open(JNIEnv* env, jobject clazz, jint f
+     }
+ 
+     if (owner) {
+-        int size = ashmemSize / sizeof(std::atomic_int);
+         new (ashmemAddr) std::atomic_int[size];
+     }
+ 
+@@ -118,8 +126,8 @@ static jlong android_util_MemoryIntArray_open(JNIEnv* env, jobject clazz, jint f
+     return reinterpret_cast<jlong>(ashmemAddr);
+ }
+ 
+-static void android_util_MemoryIntArray_close(JNIEnv* env, jobject clazz, jint fd,
+-                                              jlong ashmemAddr) {
++static void android_util_MemoryIntArray_close(JNIEnv* env, jobject clazz, jint fd, jlong ashmemAddr,
++                                              jint size) {
+     if (fd < 0) {
+         jniThrowException(env, "java/io/IOException", "bad file descriptor");
+         return;
+@@ -130,7 +138,7 @@ static void android_util_MemoryIntArray_close(JNIEnv* env, jobject clazz, jint f
+         return;
+     }
+ 
+-    int ashmemSize = ashmem_get_size_region(fd);
++    int ashmemSize = arraySize(size);
+     if (ashmemSize <= 0) {
+         jniThrowException(env, "java/io/IOException", "bad ashmem size");
+         return;
+@@ -177,13 +185,13 @@ static jint android_util_MemoryIntArray_size(JNIEnv* env, jobject clazz, jint fd
+         jniThrowIOException(env, errno);
+         return -1;
+     }
+-    return ashmemSize / sizeof(std::atomic_int);
++    return arrayNrElms(ashmemSize);
+ }
+ 
+ static const JNINativeMethod methods[] = {
+     {"nativeCreate",  "(Ljava/lang/String;I)I", (void*)android_util_MemoryIntArray_create},
+-    {"nativeOpen",  "(IZ)J", (void*)android_util_MemoryIntArray_open},
+-    {"nativeClose", "(IJ)V", (void*)android_util_MemoryIntArray_close},
++    {"nativeOpen",  "(IZI)J", (void*)android_util_MemoryIntArray_open},
++    {"nativeClose", "(IJI)V", (void*)android_util_MemoryIntArray_close},
+     // @FastNative
+     {"nativeGet",  "(JI)I", (void*)android_util_MemoryIntArray_get},
+     // @FastNative
+diff --git a/core/tests/utiltests/jni/android_util_MemoryIntArrayTest.cpp b/core/tests/utiltests/jni/android_util_MemoryIntArrayTest.cpp
+index 57ee2d5f6cbb..f27a6b435088 100644
+--- a/core/tests/utiltests/jni/android_util_MemoryIntArrayTest.cpp
++++ b/core/tests/utiltests/jni/android_util_MemoryIntArrayTest.cpp
+@@ -15,7 +15,9 @@
+  */
+ 
+ #include <atomic>
++#include <vector>
+ #include <jni.h>
++#include <unistd.h>
+ #include <cutils/ashmem.h>
+ #include <linux/ashmem.h>
+ #include <sys/ioctl.h>
+@@ -64,3 +66,26 @@ void android_util_MemoryIntArrayTest_setAshmemSize(__attribute__((unused)) JNIEn
+ 
+     ioctl(fd, ASHMEM_SET_SIZE, size);
+ }
++
++jlong android_util_MemoryIntArrayTest_mremap(__attribute__((unused)) JNIEnv* env,
++        __attribute__((unused)) jobject clazz, jlong oldAddress, jint oldSize, jint newSize)
++{
++    void* ptr = mremap(reinterpret_cast<void*>(oldAddress), oldSize, newSize, MREMAP_MAYMOVE);
++    return reinterpret_cast<jlong>(ptr);
++}
++
++jboolean android_util_MemoryIntArrayTest_isRangeMapped(__attribute__((unused)) JNIEnv* env,
++        __attribute__((unused)) jobject clazz, jlong address, jint size)
++{
++    int pageSize = getpagesize();
++    int nPages = (size + pageSize - 1) / pageSize;
++    std::vector<unsigned char> vec(nPages);
++    int result = mincore(reinterpret_cast<void*>(address), size, vec.data());
++    return result == 0;
++}
++
++jint android_util_MemoryIntArrayTest_munmap(__attribute__((unused)) JNIEnv* env,
++        __attribute__((unused)) jobject clazz, jlong address, jint size)
++{
++    return reinterpret_cast<jint>(munmap(reinterpret_cast<void*>(address), size));
++}
+diff --git a/core/tests/utiltests/jni/registration.cpp b/core/tests/utiltests/jni/registration.cpp
+index 0c84d98e9de9..339355665b12 100644
+--- a/core/tests/utiltests/jni/registration.cpp
++++ b/core/tests/utiltests/jni/registration.cpp
+@@ -20,12 +20,24 @@ extern jint android_util_MemoryIntArrayTest_createAshmem(JNIEnv* env,
+         jobject clazz, jstring name, jint size);
+ extern void android_util_MemoryIntArrayTest_setAshmemSize(JNIEnv* env,
+        jobject clazz, jint fd, jint size);
++extern jlong android_util_MemoryIntArrayTest_mremap(JNIEnv* env,
++        jobject clazz, jlong oldAddress, jint oldSize, jint newSize);
++extern jboolean android_util_MemoryIntArrayTest_isRangeMapped(JNIEnv* env,
++        jobject clazz, jlong address, jint size);
++extern jint android_util_MemoryIntArrayTest_munmap(JNIEnv* env,
++        jobject clazz, jlong address, jint size);
+ 
+ extern "C" {
+     JNIEXPORT jint JNICALL Java_android_util_MemoryIntArrayTest_nativeCreateAshmem(
+             JNIEnv * env, jobject obj, jstring name, jint size);
+     JNIEXPORT void JNICALL Java_android_util_MemoryIntArrayTest_nativeSetAshmemSize(
+             JNIEnv * env, jobject obj, jint fd, jint size);
++    JNIEXPORT jlong JNICALL Java_android_util_MemoryIntArrayTest_nativeMremap(
++            JNIEnv * env, jobject obj, jlong oldAddress, jint oldSize, jint newSize);
++    JNIEXPORT jboolean JNICALL Java_android_util_MemoryIntArrayTest_nativeIsRangeMapped(
++            JNIEnv * env, jobject obj, jlong address, jint size);
++    JNIEXPORT jint JNICALL Java_android_util_MemoryIntArrayTest_nativeMunmap(
++            JNIEnv * env, jobject obj, jlong address, jint size);
+ };
+ 
+ JNIEXPORT jint JNICALL Java_android_util_MemoryIntArrayTest_nativeCreateAshmem(
+@@ -41,3 +53,24 @@ JNIEXPORT void JNICALL Java_android_util_MemoryIntArrayTest_nativeSetAshmemSize(
+ {
+     android_util_MemoryIntArrayTest_setAshmemSize(env, obj, fd, size);
+ }
++
++JNIEXPORT jlong JNICALL Java_android_util_MemoryIntArrayTest_nativeMremap(
++        __attribute__((unused)) JNIEnv * env,__attribute__((unused)) jobject obj,
++        jlong oldAddress, jint oldSize, jint newSize)
++{
++    return android_util_MemoryIntArrayTest_mremap(env, obj, oldAddress, oldSize, newSize);
++}
++
++JNIEXPORT jboolean JNICALL Java_android_util_MemoryIntArrayTest_nativeIsRangeMapped(
++        __attribute__((unused)) JNIEnv * env,__attribute__((unused)) jobject obj,
++        jlong address, jint size)
++{
++    return android_util_MemoryIntArrayTest_isRangeMapped(env, obj, address, size);
++}
++
++JNIEXPORT jint JNICALL Java_android_util_MemoryIntArrayTest_nativeMunmap(
++        __attribute__((unused)) JNIEnv * env,__attribute__((unused)) jobject obj,
++        jlong address, jint size)
++{
++    return android_util_MemoryIntArrayTest_munmap(env, obj, address, size);
++}
+diff --git a/core/tests/utiltests/src/android/util/MemoryIntArrayTest.java b/core/tests/utiltests/src/android/util/MemoryIntArrayTest.java
+index 1459212d206e..71ff74b6f8d1 100644
+--- a/core/tests/utiltests/src/android/util/MemoryIntArrayTest.java
++++ b/core/tests/utiltests/src/android/util/MemoryIntArrayTest.java
+@@ -23,8 +23,11 @@ import static org.junit.Assert.assertTrue;
+ import static org.junit.Assert.fail;
+ 
+ import android.os.Parcel;
++import android.os.ParcelFileDescriptor;
+ import android.platform.test.annotations.DisabledOnRavenwood;
+ import android.platform.test.ravenwood.RavenwoodRule;
++import android.system.Os;
++import android.system.OsConstants;
+ 
+ import androidx.test.runner.AndroidJUnit4;
+ 
+@@ -308,6 +311,74 @@ public class MemoryIntArrayTest {
+         }
+     }
+ 
++    // Ensure mmap/munmap behave properly even if the underlying FD's size has changed.
++    @Test
++    public void testMmapAndMunmapSizeConsistency() throws Exception {
++
++        MemoryIntArray array = null;
++        int largeFd = -1;
++        int originalFd = -1;
++        long newMappedAddr = -1;
++        // Since we only allocate enough space for 1 int below, this is also the mapping size for
++        // the array, since an int is going to be less than a page in size, but the mapping size
++        // is page aligned.
++        int pageSize = (int) Os.sysconf(OsConstants._SC_PAGESIZE);
++        try {
++            array = new MemoryIntArray(1);
++
++            Field fdField = MemoryIntArray.class.getDeclaredField("mFd");
++            fdField.setAccessible(true);
++
++            Field addrField = MemoryIntArray.class.getDeclaredField("mMemoryAddr");
++            addrField.setAccessible(true);
++
++            originalFd = (int) fdField.get(array);
++
++            long mappedAddr = (long) addrField.get(array);
++
++            // Generate ashmem descriptor with a size large enough to ensure that the region spans
++            // more than 1 page.
++            largeFd = nativeCreateAshmem("large_fd", (2 * pageSize) / Integer.BYTES);
++
++            // Establish collateral adjacent mapped segment
++            newMappedAddr = nativeMremap(mappedAddr, pageSize, 2 * pageSize);
++            assertTrue("mremap should not fail", newMappedAddr != -1);
++            long adjacentProbeAddr = newMappedAddr + pageSize;
++
++            // Inject the larger FD and new mapping address before closing. This should cause only
++            // the first page of array to be unmapped, since that was its original size.
++            fdField.set(array, largeFd);
++            addrField.set(array, newMappedAddr);
++            array.close();
++
++            // Verify the original mapped configuration limits are honored. This would fail
++            // if we tried to reuse the size from the injected FD.
++            assertTrue("First page of the mapping should be unmapped",
++                       !nativeIsRangeMapped(newMappedAddr, pageSize));
++            assertTrue("Probe should not be wiped by unmap",
++                       nativeIsRangeMapped(adjacentProbeAddr, pageSize));
++            nativeMunmap(adjacentProbeAddr, pageSize);
++            newMappedAddr = -1;
++        } finally {
++            if (array != null && !array.isClosed()) {
++                IoUtils.closeQuietly(array);
++            }
++            if (originalFd >= 0) {
++                try {
++                    ParcelFileDescriptor.adoptFd(originalFd).close();
++                } catch (Exception e) {
++                    // Ignored
++                }
++            }
++            if (newMappedAddr != -1) {
++                nativeMunmap(newMappedAddr, 2 * pageSize);
++            }
++        }
++    }
++
+     private native int nativeCreateAshmem(String name, int size);
+     private native void nativeSetAshmemSize(int fd, int size);
++    private native long nativeMremap(long oldAddress, int oldSize, int newSize);
++    private native boolean nativeIsRangeMapped(long address, int size);
++    private native int nativeMunmap(long address, int size);
+ }
+-- 
+2.55.0
+

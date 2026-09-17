@@ -1,0 +1,33 @@
+From 7927e76d5ccb1190f7328574b0dfd92e7354ec6a Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Mon, 11 May 2026 05:36:32 -0700
+Subject: [PATCH 1/7] Terminate MFC NDEF read on length inflation attempt
+
+Prevent heap out-of-bounds write by explicitly marking the operation as
+failed.
+
+Bug: 508389703
+Test: Manual
+Flag: EXEMPT BUGFIX
+Change-Id: I766483737419b9dc5bfcb0a59d302266cac5a440
+Merged-In: I766483737419b9dc5bfcb0a59d302266cac5a440
+(cherry picked from commit b129d10e1242590d5d6440273f31c9dbc74cef9b)
+---
+ libnfc-nci/src/nfc/tags/rw_mfc.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libnfc-nci/src/nfc/tags/rw_mfc.cc b/libnfc-nci/src/nfc/tags/rw_mfc.cc
+index 21c904c..4fe4634 100644
+--- a/libnfc-nci/src/nfc/tags/rw_mfc.cc
++++ b/libnfc-nci/src/nfc/tags/rw_mfc.cc
+@@ -1378,6 +1378,7 @@ static void rw_mfc_handle_read_op(uint8_t* data) {
+         }
+       } else {
+         android_errorWriteLog(0x534e4554, "178725766");
++        failed = true;
+       }
+ 
+       if (p_mfc->work_offset >= p_mfc->ndef_length) {
+-- 
+2.55.0
+

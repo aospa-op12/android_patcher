@@ -1,0 +1,58 @@
+From 745d26093a764df9084ab2940c18098fc3db733b Mon Sep 17 00:00:00 2001
+From: "Isaac J. Manjarres" <isaacmanjarres@google.com>
+Date: Mon, 13 Apr 2026 17:19:07 +0000
+Subject: [PATCH 1/2] ashmem: Only handle size-sealed memfds
+
+When handling a memfd ashmem_valid()--by invoking is_memfd_fd()--just
+checks if the given fd is a memfd. However, for a memfd to be a valid
+replacement for an ashmem fd, it should also be sealed against changes
+to its size. So, ensure that when a memfd is provided to the library,
+it is only considered valid if the F_SEAL_GROW and F_SEAL_SHRINK file
+seals have been applied to it.
+
+Otherwise, the fd can be considered a valid ashmem fd, but be open to
+time of check to time of use issues.
+
+Bug: 498720726
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:a580fc27e6b7c2671932de0f5d8ad9701b294385
+Merged-In: Ide3c67f7c35258a2faed93109d1cc54600a38d85
+Change-Id: Ide3c67f7c35258a2faed93109d1cc54600a38d85
+---
+ libcutils/ashmem-dev.cpp | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/libcutils/ashmem-dev.cpp b/libcutils/ashmem-dev.cpp
+index 63a0cbf4e9..4d3a70ac8a 100644
+--- a/libcutils/ashmem-dev.cpp
++++ b/libcutils/ashmem-dev.cpp
+@@ -201,7 +201,26 @@ static bool is_memfd_fd(int fd) {
+         ALOGE("readlink(%s) failed: %m", fd_path.c_str());
+         return false;
+     }
+-    return result.starts_with("/memfd:");
++
++    if (!result.starts_with("/memfd:")) {
++        return false;
++    }
++
++    // b/498720726: Ensure that the memfd has the same restrictions on its size that an ashmem fd
++    // would. Otherwise, memfds that aren't sealed against size changes can be treated as valid
++    // ashmem fds. The size of the memory associated with those fds can then be changed while a
++    // process is using it, leading to time of check to time of use issues.
++    int seals = fcntl(fd, F_GET_SEALS);
++    if (seals == -1) {
++        ALOGE("is_memfd_fd(%d): F_GET_SEALS failed: %m", fd);
++        return false;
++    }
++
++    if ((seals & (F_SEAL_GROW | F_SEAL_SHRINK)) != (F_SEAL_GROW | F_SEAL_SHRINK)) {
++        return false;
++    }
++
++    return true;
+ }
+ 
+ int ashmem_valid(int fd) {
+-- 
+2.55.0
+

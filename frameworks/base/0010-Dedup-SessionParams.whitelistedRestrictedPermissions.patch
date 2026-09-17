@@ -1,0 +1,41 @@
+From 4c61388df1a77052279caa18c2836ec622ede651 Mon Sep 17 00:00:00 2001
+From: William Loh <wloh@google.com>
+Date: Thu, 2 Apr 2026 15:58:15 -0700
+Subject: [PATCH 10/27] Dedup SessionParams.whitelistedRestrictedPermissions
+
+Even though SessionParam.whitelistedRestrictedPermissions is a hiden API
+it's still possible to directly set it using reflection.
+
+Bug: 472269954
+Test: atest SessionSizeLimitTest
+Flag: EXEMPT bugfix
+Change-Id: I1ead472f11a13090f3fda2d5c82d0ef587a5ca84
+(cherry picked from commit 174693f1586b7216c6f74a59c5a6c55e92acf1ff)
+---
+ .../java/com/android/server/pm/PackageInstallerService.java    | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerService.java b/services/core/java/com/android/server/pm/PackageInstallerService.java
+index 5cf011289c52..b102c0f71aa5 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerService.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerService.java
+@@ -155,6 +155,7 @@ import java.security.SecureRandom;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Comparator;
++import java.util.HashSet;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+@@ -1083,6 +1084,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
+         }
+ 
+         if (params.whitelistedRestrictedPermissions != null) {
++            params.whitelistedRestrictedPermissions =
++                    new ArrayList<>(new HashSet<>(params.whitelistedRestrictedPermissions));
+             params.whitelistedRestrictedPermissions.retainAll(
+                     mPm.getAllPlatformRestrictedPermissions());
+         }
+-- 
+2.55.0
+

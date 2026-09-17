@@ -1,0 +1,230 @@
+From 5fafbdfba56fab6a24610a411c316b712ddd27da Mon Sep 17 00:00:00 2001
+From: Aishwarya Mallampati <amallampati@google.com>
+Date: Tue, 5 May 2026 11:08:12 -0700
+Subject: [PATCH] Filter MMS/SMS queries by subscription ID
+
+This change modifies MmsSmsProvider to filter results based on the subscription IDs associated with the current user. Queries for conversations, search suggestions, and search results will now return an empty cursor if no subscriptions are available for the user. Otherwise, the queries are augmented with a subId clause to restrict results to messages belonging to the user's subscriptions.
+
+Bug: 418776187
+Test: atest
+Manual Test: b/510423582
+Flag: EXEMPT BUGFIX
+
+Change-Id: I64fa9a2e334f97f7d6a9c5e62edff73f8e7294c1
+Merged-In: I64fa9a2e334f97f7d6a9c5e62edff73f8e7294c1
+---
+ .../providers/telephony/MmsSmsProvider.java   | 46 ++++++++++++--
+ .../telephony/MmsSmsProviderTest.java         | 62 +++++++++++++++++++
+ 2 files changed, 104 insertions(+), 4 deletions(-)
+
+diff --git a/src/com/android/providers/telephony/MmsSmsProvider.java b/src/com/android/providers/telephony/MmsSmsProvider.java
+index 01c6895..06054cc 100755
+--- a/src/com/android/providers/telephony/MmsSmsProvider.java
++++ b/src/com/android/providers/telephony/MmsSmsProvider.java
+@@ -208,7 +208,7 @@ public class MmsSmsProvider extends ContentProvider {
+ 
+     private static final String[] SEARCH_STRING = new String[1];
+     private static final String SEARCH_QUERY = "SELECT snippet(words, '', ' ', '', 1, 1) as " +
+-            "snippet FROM words WHERE index_text MATCH ? ORDER BY snippet LIMIT 50;";
++            "snippet FROM words WHERE index_text MATCH ?";
+ 
+     private static final String SMS_CONVERSATION_CONSTRAINT = "(" +
+             Sms.TYPE + " != " + Sms.MESSAGE_TYPE_DRAFT + ")";
+@@ -220,7 +220,7 @@ public class MmsSmsProvider extends ContentProvider {
+             Mms.MESSAGE_TYPE + " = " + PduHeaders.MESSAGE_TYPE_NOTIFICATION_IND + "))";
+ 
+     private static String getTextSearchQuery(String smsTable, String pduTable,
+-            boolean canReadRestrictedMessages, String otpFilter) {
++            boolean canReadRestrictedMessages, String otpFilter, String selectionBySubIds) {
+ 
+         // Append read restriction clause to the query if the caller can't read restricted messages.
+         String smsQueryReadRestrictionClause =
+@@ -228,6 +228,8 @@ public class MmsSmsProvider extends ContentProvider {
+                         ? (" AND " + getRestrictedTextSearchQueryWhereClause(smsTable)) : "";
+ 
+         String smsOtpClause = !TextUtils.isEmpty(otpFilter) ? " AND " + otpFilter + " " : "";
++        String smsSubIdClause = !TextUtils.isEmpty(selectionBySubIds)
++                ? " AND " + smsTable + "." + selectionBySubIds.replace("'", "") + " " : "";
+ 
+         // Search on the words table but return the rows from the corresponding sms table
+         final String smsQuery = "SELECT "
+@@ -244,12 +246,15 @@ public class MmsSmsProvider extends ContentProvider {
+                 + "AND " + smsTable + "._id=words.source_id "
+                 + smsQueryReadRestrictionClause
+                 + smsOtpClause
++                + smsSubIdClause
+                 + "AND words.table_to_use=1)";
+ 
+         // Append read restriction clause to the query if the caller can't read restricted messages.
+         String mmsQueryReadRestrictionClause =
+                 Flags.secureAccessToRestrictedRcsMessages() && !canReadRestrictedMessages
+                         ? (" AND " + getRestrictedTextSearchQueryWhereClause(pduTable)) : "";
++        String mmsSubIdClause = !TextUtils.isEmpty(selectionBySubIds)
++                ? " AND " + pduTable + "." + selectionBySubIds.replace("'", "") + " " : "";
+         // Search on the words table but return the rows from the corresponding parts table
+         final String mmsQuery = "SELECT "
+                 + pduTable + "._id,"
+@@ -268,6 +273,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 + "AND (index_text MATCH ?) "
+                 + "AND (part._id = words.source_id) "
+                 + mmsQueryReadRestrictionClause
++                + mmsSubIdClause
+                 + "AND (words.table_to_use=2))";
+ 
+         // This code queries the sms and mms tables and returns a unified result set
+@@ -535,6 +541,13 @@ public class MmsSmsProvider extends ContentProvider {
+                             break;
+                         }
+                     }
++                    if (selectionBySubIds == null) {
++                        // No subscriptions associated with user, return empty cursor.
++                        Log.d(LOG_TAG, "URI_CONVERSATIONS - subId not associated with user.");
++                        return emptyCursor;
++                    }
++                    selection = DatabaseUtils.concatenateWhere(selection, selectionBySubIds);
++
+                     cursor = getSimpleConversations(
+                             projection, selection, selectionArgs,
+                             canReadRestrictedMessages, otpFilter);
+@@ -564,11 +577,24 @@ public class MmsSmsProvider extends ContentProvider {
+             case URI_MESSAGES_COUNT:
+                 return getAllMessagesCount();
+             case URI_CONVERSATIONS_RECIPIENTS:
++                if (selectionBySubIds == null) {
++                    Log.d(LOG_TAG,
++                            "URI_CONVERSATIONS_RECIPIENTS - subId not associated with user.");
++                    return emptyCursor;
++                }
++                selection = DatabaseUtils.concatenateWhere(selection, selectionBySubIds);
++
+                 cursor = getConversationById(
+                         uri.getPathSegments().get(1), projection, selection,
+                         selectionArgs, sortOrder, canReadRestrictedMessages, otpFilter);
+                 break;
+             case URI_CONVERSATIONS_SUBJECT:
++                if (selectionBySubIds == null) {
++                    Log.d(LOG_TAG, "URI_CONVERSATIONS_SUBJECT - subId not associated with user.");
++                    return emptyCursor;
++                }
++                selection = DatabaseUtils.concatenateWhere(selection, selectionBySubIds);
++
+                 cursor = getConversationById(
+                         uri.getPathSegments().get(1), projection, selection,
+                         selectionArgs, sortOrder, canReadRestrictedMessages, otpFilter);
+@@ -645,6 +671,11 @@ public class MmsSmsProvider extends ContentProvider {
+                 if (!TextUtils.isEmpty(otpFilter)) {
+                     return emptyCursor;
+                 }
++                if (selectionBySubIds == null) {
++                    Log.d(LOG_TAG, "URI_CONVERSATIONS_SUGGEST - subId not associated with user.");
++                    return emptyCursor;
++                }
++
+                 SEARCH_STRING[0] = uri.getQueryParameter("pattern") + '*' ;
+ 
+                 // find the words which match the pattern using the snippet function.  The
+@@ -659,7 +690,9 @@ public class MmsSmsProvider extends ContentProvider {
+                             "with this query");
+                 }
+ 
+-                cursor = db.rawQuery(SEARCH_QUERY, SEARCH_STRING);
++                String searchQuery = SEARCH_QUERY + " AND " + selectionBySubIds.replace("'", "")
++                        + " ORDER BY snippet LIMIT 50;";
++                cursor = db.rawQuery(searchQuery, SEARCH_STRING);
+                 break;
+             }
+             case URI_MESSAGE_ID_TO_THREAD: {
+@@ -701,11 +734,16 @@ public class MmsSmsProvider extends ContentProvider {
+                             "with this query");
+                 }
+ 
++                if (selectionBySubIds == null) {
++                    Log.d(LOG_TAG, "URI_SEARCH - subId not associated with user.");
++                    return emptyCursor;
++                }
++
+                 String searchString = uri.getQueryParameter("pattern") + "*";
+ 
+                 try {
+                     cursor = db.rawQuery(getTextSearchQuery(smsTable, pduTable,
+-                        canReadRestrictedMessages, otpFilter),
++                        canReadRestrictedMessages, otpFilter, selectionBySubIds),
+                             new String[] { searchString, searchString });
+                 } catch (Exception ex) {
+                     Log.e(LOG_TAG, "got exception: " + ex.toString());
+diff --git a/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java b/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
+index a5cd5a4..cd0e4bf 100644
+--- a/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
++++ b/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
+@@ -275,6 +275,68 @@ public class MmsSmsProviderTest {
+         }
+     }
+ 
++    @Test
++    @DisableFlags(Flags.FLAG_SECURE_ACCESS_TO_RESTRICTED_RCS_MESSAGES)
++    public void testQuery_subIdEmpty_returnsEmptyCursor() {
++        // Setup mock to return empty subscriptions
++        doReturn(new ArrayList<SubscriptionInfo>()).when(mSubscriptionManager)
++                .getSubscriptionInfoListAssociatedWithUser(any(UserHandle.class));
++
++        String[] urisToTest = {
++                "content://mms-sms/conversations?simple=true",
++                "content://mms-sms/conversations/1/recipients",
++                "content://mms-sms/conversations/1/subject",
++                "content://mms-sms/search?pattern=test",
++                "content://mms-sms/searchSuggest?pattern=test"
++        };
++
++        for (String uriString : urisToTest) {
++            Uri testUri = Uri.parse(uriString);
++            Cursor cursor = null;
++            try {
++                cursor = mMmsSmsProvider.query(testUri, null, null, null, null);
++                assertNotNull("Cursor should not be null for URI: " + uriString, cursor);
++                assertEquals("Cursor should be empty for URI: " + uriString + " when no subIds", 0,
++                        cursor.getCount());
++            } finally {
++                if (cursor != null) {
++                    cursor.close();
++                }
++            }
++        }
++    }
++
++    @Test
++    @DisableFlags(Flags.FLAG_SECURE_ACCESS_TO_RESTRICTED_RCS_MESSAGES)
++    public void testQuery_subIdValid_doesNotReturnEmptyCursor() {
++        // Mocks for sub_id are already setup in setUp()
++
++        String[] urisToTest = {
++                "content://mms-sms/conversations?simple=true",
++                "content://mms-sms/conversations/1/recipients",
++                "content://mms-sms/conversations/1/subject",
++                "content://mms-sms/search?pattern=test",
++                "content://mms-sms/searchSuggest?pattern=test"
++        };
++
++        for (String uriString : urisToTest) {
++            Uri testUri = Uri.parse(uriString);
++            Cursor cursor = null;
++            try {
++                cursor = mMmsSmsProvider.query(testUri, null, null, null, null);
++                assertNotNull("Cursor should not be null for URI: " + uriString, cursor);
++                // We just verify it does not crash and returns a cursor.
++                // The actual count might be 0 if the preset data does not match the specific URI
++                // (like search), but we are primarily testing that it doesn't short-circuit to
++                // an empty cursor due to sub_id checks.
++            } finally {
++                if (cursor != null) {
++                    cursor.close();
++                }
++            }
++        }
++    }
++
+     private void insertPresetData() {
+         // Insert common data for all tests
+         try {
+-- 
+2.55.0
+

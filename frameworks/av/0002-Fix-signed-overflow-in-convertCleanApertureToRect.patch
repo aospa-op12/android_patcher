@@ -1,0 +1,66 @@
+From f7dd994e3e3e53dc9fbb1adeee7fb72ad1a8d050 Mon Sep 17 00:00:00 2001
+From: Venkatarama Avadhani <venkataramaa@google.com>
+Date: Wed, 20 May 2026 11:56:27 +0530
+Subject: [PATCH 2/3] Fix signed overflow in convertCleanApertureToRect
+
+In HeifCleanAperture.cpp:convertCleanApertureToRect(),
+centerX.getInt32() and centerY.getInt32() are added with clapW and
+clapH respectively to calculate the right and bottom coordinates.
+This signed-integer addition can overflow int32_t with maliciously
+crafted CleanAperture values, causing an IntSan abort in the
+media.extractor process.
+
+Prevent the overflow by validating bounds using safe int64_t arithmetic
+prior to performing the addition.
+
+Bug: 503550257
+Test: atest HeifCleanApertureUnitTest --host
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:5fcd67a562a2dffdfaf25f35c7acf805a96ac8ae
+Merged-In: I2b282fc9e69a6510e9414fd2bbfe3beddf81001e
+Change-Id: I2b282fc9e69a6510e9414fd2bbfe3beddf81001e
+---
+ media/module/extractors/mp4/HeifCleanAperture.cpp         | 8 ++++----
+ .../extractors/mp4/tests/HeifCleanApertureUnitTest.cpp    | 3 +++
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/media/module/extractors/mp4/HeifCleanAperture.cpp b/media/module/extractors/mp4/HeifCleanAperture.cpp
+index f0a086703e..7d78f0e869 100644
+--- a/media/module/extractors/mp4/HeifCleanAperture.cpp
++++ b/media/module/extractors/mp4/HeifCleanAperture.cpp
+@@ -142,14 +142,14 @@ bool convertCleanApertureToRect(uint32_t imageW, uint32_t imageH, const CleanApe
+ 
+     *left = centerX.getInt32();
+     *top = centerY.getInt32();
+-    *right = *left + clapW;
+-    *bottom = *top + clapH;
+ 
+     // Make sure that the crop rect is within the image bounds.
+-    if (*left > (UINT32_MAX - clapW) || *right > imageW || *top > (UINT32_MAX - clapH) ||
+-        *bottom > imageH) {
++    if ((int64_t)*left + clapW > (int64_t)imageW || (int64_t)*top + clapH > (int64_t)imageH) {
+         return false;
+     }
++
++    *right = *left + clapW;
++    *bottom = *top + clapH;
+     return true;
+ }
+ 
+diff --git a/media/module/extractors/mp4/tests/HeifCleanApertureUnitTest.cpp b/media/module/extractors/mp4/tests/HeifCleanApertureUnitTest.cpp
+index 6a84ae3e1b..ef95896a38 100644
+--- a/media/module/extractors/mp4/tests/HeifCleanApertureUnitTest.cpp
++++ b/media/module/extractors/mp4/tests/HeifCleanApertureUnitTest.cpp
+@@ -51,6 +51,9 @@ const InvalidClapPropertyParam kInvalidClapPropertyTestParams[] = {
+         {120, 160, {Fraction(96, 1), Fraction(132, 5), Fraction(0, 1), Fraction(0, 1)}},
+         {722, 1024, {Fraction(385, 1), Fraction(330, 1), Fraction(103, 1), Fraction(-308, 1)}},
+         {1024, 722, {Fraction(330, 1), Fraction(385, 1), Fraction(-308, 1), Fraction(103, 1)}},
++        // Signed integer overflow in horizontal/vertical offset + width/height calculation.
++        {2, 2, {Fraction(2, 1), Fraction(2, 1), Fraction(0x7FFFFFFE, 1), Fraction(0, 1)}},
++        {2, 2, {Fraction(2, 1), Fraction(2, 1), Fraction(0, 1), Fraction(0x7FFFFFFE, 1)}},
+ };
+ 
+ using InvalidClapPropertyTest = ::testing::TestWithParam<InvalidClapPropertyParam>;
+-- 
+2.55.0
+

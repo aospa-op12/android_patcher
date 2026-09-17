@@ -1,0 +1,190 @@
+From 47335b8342e09878e1b4cc8c2d2a2d33800afa45 Mon Sep 17 00:00:00 2001
+From: Joshua Duong <joshuaduong@google.com>
+Date: Sun, 19 Apr 2026 17:06:28 +0000
+Subject: [PATCH 2/2] Fix Use-After-Free in TLS handshake.
+
+Fix a Use-After-Free vulnerability in adbd_auth_tls_handshake where a
+detached thread captures a raw pointer to an 'atransport' object.
+
+The fix uses the established 'transport-to-callback' flow in adbd auth.
+A weak pointer to the transport is captured, and the blocking TLS
+handshake is performed in a background thread. All state updates are
+serialized back onto the fdevent looper after verifying the transport's
+liveness.
+
+Additionally:
+- Add a 3-second socket timeout during the TLS handshake in
+  FdConnection::DoTlsHandshake for non-host builds to prevent Denial of
+  Service.
+- Decouple the client and server implementations of DoTlsHandshake into
+  separate functions using #ifdefs to improve code readability and
+  maintainability.
+
+Bug: 499053500
+Test: atest adb_test --host
+Flag: EXEMPT BUGFIX
+Change-Id: I8ed271ab3f15b812b1fc246f4044730f087a1f9e
+(cherry picked from commit 5651177b24f8410e0c569fbaded96e628f08e3c4)
+---
+ daemon/auth.cpp | 34 +++++++++++++++++++++++-----
+ transport.cpp   | 59 +++++++++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 80 insertions(+), 13 deletions(-)
+
+diff --git a/daemon/auth.cpp b/daemon/auth.cpp
+index 372e940..8e6b27d 100644
+--- a/daemon/auth.cpp
++++ b/daemon/auth.cpp
+@@ -419,20 +419,42 @@ void adbd_auth_tls_handshake(atransport* t) {
+         CHECK(rsa_pkey);
+     }
+ 
+-    std::thread([t]() {
++    void* arg = transport_to_callback_arg(t);
++    auto connection = t->connection();
++    std::thread([arg, connection]() {
+         std::string auth_key;
+-        if (t->connection()->DoTlsHandshake(rsa_pkey, &auth_key)) {
++        // To avoid blocking the fdevent thread, we run the handshake in a thread.
++        bool connected = connection->DoTlsHandshake(rsa_pkey, &auth_key);
++
++        // Move back to the fdevent thread to safely verify the transport's liveness
++        // and update its state. All transport state mutations and the
++        // transport_from_callback_arg() lookup must be performed on the looper
++        // thread to ensure thread-safety and avoid race conditions with
++        // transport destruction.
++        fdevent_run_on_looper([arg, auth_key = std::move(auth_key), connected]() {
++            atransport* t = transport_from_callback_arg(arg);
++            if (!t) {
++                if (connected) {
++                    LOG(ERROR) << "TLS handshake succeeded for deleted transport, ignoring";
++                }
++                return;
++            }
++
++            if (!connected) {
++                // Only allow one attempt at the handshake.
++                t->Kick();
++                return;
++            }
++
+             VLOG(AUTH) << "auth_key=" << auth_key;
+             if (t->IsTcpDevice()) {
+                 t->auth_key = auth_key;
+                 adbd_wifi_secure_connect(t);
+             } else {
++                // TODO(505788736): This code is most likely dead.
+                 adbd_auth_verified(t);
+                 adbd_notify_framework_connected_key(t);
+             }
+-        } else {
+-            // Only allow one attempt at the handshake.
+-            t->Kick();
+-        }
++        });
+     }).detach();
+ }
+diff --git a/transport.cpp b/transport.cpp
+index 09d7d20..66273fc 100644
+--- a/transport.cpp
++++ b/transport.cpp
+@@ -511,7 +511,11 @@ bool FdConnection::Write(apacket* packet) {
+     return true;
+ }
+ 
+-bool FdConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
++#if ADB_HOST
++bool FdConnection::DoTlsHandshake(RSA* key, std::string*) {
++    // DoTlsHandshake can be a long operation, and should not block the fdevent thread.
++    CHECK_NOT_LOOPER_THREAD();
++
+     bssl::UniquePtr<EVP_PKEY> evp_pkey(EVP_PKEY_new());
+     if (!EVP_PKEY_set1_RSA(evp_pkey.get(), key)) {
+         LOG(ERROR) << "EVP_PKEY_set1_RSA failed";
+@@ -522,13 +526,9 @@ bool FdConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
+     auto evp_str = Key::ToPEMString(evp_pkey.get());
+ 
+     int osh = cast_handle_to_int(adb_get_os_handle(fd_));
+-#if ADB_HOST
+     tls_ = TlsConnection::Create(TlsConnection::Role::Client, x509_str, evp_str, osh);
+-#else
+-    tls_ = TlsConnection::Create(TlsConnection::Role::Server, x509_str, evp_str, osh);
+-#endif
+     CHECK(tls_);
+-#if ADB_HOST
++
+     // TLS 1.3 gives the client no message if the server rejected the
+     // certificate. This will enable a check in the tls connection to check
+     // whether the client certificate got rejected. Note that this assumes
+@@ -539,16 +539,60 @@ bool FdConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
+     tls_->SetCertificateCallback(adb_tls_set_certificate);
+     // Allow any server certificate
+     tls_->SetCertVerifyCallback([](X509_STORE_CTX*) { return 1; });
++
++    auto err = tls_->DoHandshake();
++    if (err == TlsError::Success) {
++        return true;
++    }
++
++    tls_.reset();
++    return false;
++}
+ #else
++bool FdConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
++    // DoTlsHandshake can be a long operation, and should not block the fdevent thread.
++    CHECK_NOT_LOOPER_THREAD();
++
++    bssl::UniquePtr<EVP_PKEY> evp_pkey(EVP_PKEY_new());
++    if (!EVP_PKEY_set1_RSA(evp_pkey.get(), key)) {
++        LOG(ERROR) << "EVP_PKEY_set1_RSA failed";
++        return false;
++    }
++    auto x509 = GenerateX509Certificate(evp_pkey.get());
++    auto x509_str = X509ToPEMString(x509.get());
++    auto evp_str = Key::ToPEMString(evp_pkey.get());
++
++    int osh = cast_handle_to_int(adb_get_os_handle(fd_));
++    tls_ = TlsConnection::Create(TlsConnection::Role::Server, x509_str, evp_str, osh);
++    CHECK(tls_);
++
+     // Add callback to check certificate against a list of known public keys
+     tls_->SetCertVerifyCallback(
+             [auth_key](X509_STORE_CTX* ctx) { return adbd_tls_verify_cert(ctx, auth_key); });
+     // Add the list of allowed client CA issuers
+     auto ca_list = adbd_tls_client_ca_list();
+     tls_->SetClientCAList(ca_list.get());
+-#endif
++
++    // Set a timeout for the TLS handshake to prevent a malicious or slow client
++    // from blocking this thread indefinitely.
++    struct timeval timeout;
++    timeout.tv_sec = 3;
++    timeout.tv_usec = 0;
++    if (adb_setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
++        PLOG(ERROR) << "failed to set TLS handshake read timeout";
++    }
++    if (adb_setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
++        PLOG(ERROR) << "failed to set TLS handshake write timeout";
++    }
+ 
+     auto err = tls_->DoHandshake();
++
++    // Reset the timeout after the handshake is done.
++    timeout.tv_sec = 0;
++    timeout.tv_usec = 0;
++    adb_setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
++    adb_setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
++
+     if (err == TlsError::Success) {
+         return true;
+     }
+@@ -556,6 +600,7 @@ bool FdConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
+     tls_.reset();
+     return false;
+ }
++#endif
+ 
+ void FdConnection::Close() {
+     adb_shutdown(fd_.get());
+-- 
+2.55.0
+

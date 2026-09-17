@@ -1,0 +1,75 @@
+From 8d7be70be1c08edabb32579f8c070fc2419d4131 Mon Sep 17 00:00:00 2001
+From: Vipul Singh <imvipul@google.com>
+Date: Wed, 6 May 2026 11:06:19 -0700
+Subject: [PATCH 15/27] Remove usage of Parcel.allowSquashing in RemoteViews
+ and immediate unparceling of Bundle
+
+Squashing was added for application info but it doesn't work so mApplicationInfoCache was also added. Removing this from RemoteView as its redundant. And removed early unparceling of Bundle in ReflectionAction.
+
+Flag: EXEMPT BUGFIX
+Bug: 477278752
+Test: m sts && sts-tradefed run sts-dynamic-develop -m StsComposedHostTestCases --compatibility:test-arg "com.android.compatibility.common.tradefed.testtype.JarHostTest:include-annotation:android.platform.test.annotations.StsPresubmit"
+Change-Id: Ie717bcaa9a86f998836144f216318cb9addbae0d
+(cherry picked from commit e1b25527c312b0d87b5399ca383d2864c9767738)
+---
+ core/java/android/widget/RemoteViews.java | 23 +----------------------
+ 1 file changed, 1 insertion(+), 22 deletions(-)
+
+diff --git a/core/java/android/widget/RemoteViews.java b/core/java/android/widget/RemoteViews.java
+index baaaee43c352..1318f4c85d78 100644
+--- a/core/java/android/widget/RemoteViews.java
++++ b/core/java/android/widget/RemoteViews.java
+@@ -357,13 +357,6 @@ public class RemoteViews implements Parcelable, Filter {
+     static final int FLAG_MASK_TO_PROPAGATE =
+             FLAG_WIDGET_IS_COLLECTION_CHILD | FLAG_USE_LIGHT_BACKGROUND_LAYOUT;
+ 
+-    /**
+-     * A ReadWriteHelper which has the same behavior as ReadWriteHelper.DEFAULT, but which is
+-     * intentionally a different instance in order to trick Bundle reader so that it doesn't allow
+-     * lazy initialization.
+-     */
+-    private static final Parcel.ReadWriteHelper ALTERNATIVE_DEFAULT = new Parcel.ReadWriteHelper();
+-
+     /**
+      * Used to restrict the views which can be inflated
+      *
+@@ -3056,18 +3049,7 @@ public class RemoteViews implements Parcelable, Filter {
+                     this.mValue = in.readTypedObject(Bitmap.CREATOR);
+                     break;
+                 case BUNDLE:
+-                    // Because we use Parcel.allowSquashing() when writing, and that affects
+-                    //  how the contents of Bundles are written, we need to ensure the bundle is
+-                    //  unparceled immediately, not lazily.  Setting a custom ReadWriteHelper
+-                    //  just happens to have that effect on Bundle.readFromParcel().
+-                    // TODO(b/212731590): build this state tracking into Bundle
+-                    if (in.hasReadWriteHelper()) {
+-                        this.mValue = in.readBundle();
+-                    } else {
+-                        in.setReadWriteHelper(ALTERNATIVE_DEFAULT);
+-                        this.mValue = in.readBundle();
+-                        in.setReadWriteHelper(null);
+-                    }
++                    this.mValue = in.readBundle();
+                     break;
+                 case INTENT:
+                     this.mValue = in.readTypedObject(Intent.CREATOR);
+@@ -9468,7 +9450,6 @@ public class RemoteViews implements Parcelable, Filter {
+ 
+     private void writeToParcel(Parcel dest, int flags,
+             @Nullable SparseArray<Intent> intentsToIgnore) {
+-        boolean prevSquashingAllowed = dest.allowSquashing();
+ 
+         if (!hasMultipleLayouts()) {
+             dest.writeInt(MODE_NORMAL);
+@@ -9518,8 +9499,6 @@ public class RemoteViews implements Parcelable, Filter {
+         dest.writeLong(mProviderInstanceId);
+         dest.writeBoolean(mHasDrawInstructions);
+         dest.writeFloat(mOriginalDensity);
+-
+-        dest.restoreAllowSquashing(prevSquashingAllowed);
+     }
+ 
+     private void writeActionsToParcel(Parcel parcel, int flags) {
+-- 
+2.55.0
+

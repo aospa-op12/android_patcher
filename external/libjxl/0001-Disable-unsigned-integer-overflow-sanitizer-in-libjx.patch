@@ -1,0 +1,39 @@
+From 60cf2453b0a9e25318592a8d53167d907fbf7ce8 Mon Sep 17 00:00:00 2001
+From: John Reck <jreck@google.com>
+Date: Wed, 10 Jun 2026 20:22:27 +0000
+Subject: [PATCH] Disable unsigned integer overflow sanitizer in libjxl
+
+Disables the unsigned integer overflow sanitizer for libjxl.
+Upstream libjxl uses unsigned wrap-around intentionally in several
+places (e.g. ClampedGradient, backward loops), which triggers UBSan
+aborts on Android since it is enabled by default.
+
+Since unsigned overflow is defined behavior in C++, and these overflows
+are benign, we disable this sanitizer to avoid maintaining extensive
+local patches, while keeping signed overflow and other UB sanitizers
+enabled.
+
+Bug: 513832249
+Test: atest CtsGraphicsTestCases:android.graphics.cts.ImageDecoderTest#testInterestingDngs
+Flag: EXEMPT BUGFIX
+DISABLE_TOPIC_PROTECTOR
+Change-Id: I5bac14ad6973b3bc7dbbf865c2159f9f233f728c
+---
+ Android.bp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/Android.bp b/Android.bp
+index 22a178e..b6b1404 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -22,7 +22,6 @@ cc_library {
+     ],
+     sanitize: {
+         all_undefined: true,
+-        integer_overflow: true,
+     },
+     export_include_dirs: [
+         "lib/include",
+-- 
+2.55.0
+

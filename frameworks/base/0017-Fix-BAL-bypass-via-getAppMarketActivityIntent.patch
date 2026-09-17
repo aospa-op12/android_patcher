@@ -1,0 +1,57 @@
+From 732785af9cc1a8a9ef27a100d23bcb3b6aeaab31 Mon Sep 17 00:00:00 2001
+From: Himanshu Gupta <himanshuz@google.com>
+Date: Tue, 5 May 2026 17:00:48 +0100
+Subject: [PATCH 17/27] Fix BAL bypass via getAppMarketActivityIntent
+
+LauncherAppsService.getAppMarketActivityIntent created a PendingIntent
+on behalf of the system server (UID 1000) due to cleared identity.
+An unprivileged app could request this IntentSender and use it as
+a deleteIntent in a notification, allowing it to launch activities
+from the background when the notification is dismissed, bypassing
+BAL restrictions.
+
+This fix sets the PendingIntentCreatorBackgroundActivityStartMode to
+ALLOW_IF_VISIBLE when creating the PendingIntent. This ensures that
+the PendingIntent carries restrictions that prevent background activity
+launches unless the app is visible, while still allowing the system
+server to create the PendingIntent (preserving cross-profile functionality).
+
+Bug: 492867206
+Test: atest CtsPackageManagerTestCases:android.content.pm.cts.LauncherAppsForHiddenProfilesTest
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:0c7caef3e68dc331a45cad0b6bbee69e7cf928ba
+Merged-In: Ida112cd1f289089c4dba4c81d5cd43496daeeb62
+Change-Id: Ida112cd1f289089c4dba4c81d5cd43496daeeb62
+---
+ .../java/com/android/server/pm/LauncherAppsService.java   | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/pm/LauncherAppsService.java b/services/core/java/com/android/server/pm/LauncherAppsService.java
+index 9980ac7b3d09..7f023d991939 100644
+--- a/services/core/java/com/android/server/pm/LauncherAppsService.java
++++ b/services/core/java/com/android/server/pm/LauncherAppsService.java
+@@ -1867,6 +1867,12 @@ public class LauncherAppsService extends SystemService {
+         @Nullable
+         private IntentSender buildIntentSenderForUser(
+                 @NonNull Intent intent, @NonNull UserHandle user) {
++            // Only allow foreground apps to start background activities with this PendingIntent.
++            Bundle options = ActivityOptions.makeBasic()
++                    .setPendingIntentCreatorBackgroundActivityStartMode(
++                            ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE)
++                    .toBundle();
++
+             final PendingIntent pi =
+                     PendingIntent.getActivityAsUser(
+                             mContext,
+@@ -1874,7 +1880,7 @@ public class LauncherAppsService extends SystemService {
+                             intent,
+                             PendingIntent.FLAG_IMMUTABLE
+                                     | FLAG_UPDATE_CURRENT,
+-                            /* options */ null,
++                            options,
+                             user);
+             return pi == null ? null : pi.getIntentSender();
+         }
+-- 
+2.55.0
+

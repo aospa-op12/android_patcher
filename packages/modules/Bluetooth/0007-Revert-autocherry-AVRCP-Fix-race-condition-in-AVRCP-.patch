@@ -1,0 +1,94 @@
+From acec3e48096a1129888fb4b021daccc1dd1c2aa2 Mon Sep 17 00:00:00 2001
+From: Sean Du <do4suki@gmail.com>
+Date: Thu, 17 Sep 2026 16:40:22 +0800
+Subject: [PATCH 07/10] Revert "[autocherry] AVRCP: Fix race condition in AVRCP
+ SendMediaUpdate am: e67dd4d9a5 am: e67dd4d9a5"
+
+This reverts commit a52974c14ca777b4d9e42707e113685a4cdbc6e3.
+
+Replaced by upstream AOSP fix which provides a cleaner solution
+by moving device iteration inside the lambda on bt_main_thread.
+
+Change-Id: I853da03953fb11998903f6c683848f75dd226dba
+Signed-off-by: Sean Du <do4suki@gmail.com>
+---
+ system/btif/avrcp/avrcp_service.cc | 32 ++++++------------------------
+ system/profile/avrcp/device.cc     | 10 ----------
+ 2 files changed, 6 insertions(+), 36 deletions(-)
+
+diff --git a/system/btif/avrcp/avrcp_service.cc b/system/btif/avrcp/avrcp_service.cc
+index 5d33688acc0..386ae8cbe04 100644
+--- a/system/btif/avrcp/avrcp_service.cc
++++ b/system/btif/avrcp/avrcp_service.cc
+@@ -536,19 +536,10 @@ void AvrcpService::SendMediaUpdate(bool track_changed, bool play_state, bool que
+     return;
+   }
+   // This function may be called on any thread, we need to make sure that the
+-  // device update happens on the main thread. Additionally, validate the weak
+-  // pointer before accessing the device to prevent the use after free in case
+-  // device is cleaned-up before callback execution.
++  // device update happens on the main thread.
+   for (const auto& device : instance_->connection_handler_->GetListOfDevices()) {
+-    do_in_main_thread(base::BindOnce(
+-        [](base::WeakPtr<Device> device, bool track_changed, bool play_state, bool queue) {
+-          if (!device) {
+-            log::verbose("Device destroyed before media update could be delivered");
+-            return;
+-          }
+-          device->SendMediaUpdate(track_changed, play_state, queue);
+-        },
+-        device.get()->Get(), track_changed, play_state, queue));
++    do_in_main_thread(base::BindOnce(&Device::SendMediaUpdate, device.get()->Get(), track_changed,
++                                     play_state, queue));
+   }
+ }
+ 
+@@ -596,21 +587,10 @@ void AvrcpService::SendPlayerSettingsChanged(std::vector<PlayerAttribute> attrib
+ 
+   log::info("{}", ss.str());
+ 
+-  // Ensure that the update is posted to the correct thread with weak pointer validation.
+-  // This prevents use-after-free if device disconnects before callback executes.
+-  // The lambda validates the weak pointer before accessing the device to prevent
+-  // crashes when the device is destroyed during callback execution.
++  // Ensure that the update is posted to the correct thread
+   for (const auto& device : instance_->connection_handler_->GetListOfDevices()) {
+-    do_in_main_thread(base::BindOnce(
+-        [](base::WeakPtr<Device> device, std::vector<PlayerAttribute> attrs,
+-            std::vector<uint8_t> vals) {
+-          if (!device) {
+-            log::verbose("Device cleaned-up before player setting notification could be sent");
+-            return;
+-          }
+-          device->HandlePlayerSettingChanged(std::move(attrs), std::move(vals));
+-        },
+-        device.get()->Get(), attributes, values));
++    do_in_main_thread(base::BindOnce(&Device::HandlePlayerSettingChanged, device.get()->Get(),
++                                     attributes, values));
+   }
+ }
+ 
+diff --git a/system/profile/avrcp/device.cc b/system/profile/avrcp/device.cc
+index 9baf99828d6..e283ac2b04e 100644
+--- a/system/profile/avrcp/device.cc
++++ b/system/profile/avrcp/device.cc
+@@ -2327,16 +2327,6 @@ void Device::DeviceDisconnected() {
+   log::info("{} : Device was disconnected", address_);
+   play_pos_update_cb_.Cancel();
+ 
+-  // Clear all notification registrations to prevent callbacks after disconnect
+-  track_changed_ = Notification(false, 0);
+-  play_status_changed_ = Notification(false, 0);
+-  play_pos_changed_ = Notification(false, 0);
+-  player_setting_changed_ = Notification(false, 0);
+-  now_playing_changed_ = Notification(false, 0);
+-  addr_player_changed_ = Notification(false, 0);
+-  avail_players_changed_ = Notification(false, 0);
+-  uids_changed_ = Notification(false, 0);
+-
+   set_vol_cmd_in_progress_ = false;
+   pending_volume_.reset();
+ 
+-- 
+2.55.0
+

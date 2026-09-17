@@ -1,0 +1,38 @@
+From 6a8b51cd07989bf097a88a567fd6d6c1053d9848 Mon Sep 17 00:00:00 2001
+From: sungcheol ahn <donaldahn@google.com>
+Date: Mon, 18 May 2026 01:01:48 +0000
+Subject: [PATCH 23/27] Remove CLASS_EXISTENCE_CHECK metadata from
+ ConnectivityCallListenerService
+
+Addressing security vulnerability b/501155244 by removing the
+'android.telecom.CLASS_EXISTENCE_CHECK' metadata. The corresponding
+logic in Telecom that checked this metadata has been removed as it
+posed a risk of arbitrary code execution in system_server.
+
+Bug: 501155244
+Test: atest InCallControllerTests, Manual
+Flag: EXEMPT BUGFIX
+Change-Id: I09d72cbdef00007e21f023731b45bae25cc0a7f9
+---
+ core/res/AndroidManifest.xml | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 83eabca0e33c..c6e89c5bc7f3 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -11331,11 +11331,6 @@
+                  android:exported="true">
+             <meta-data android:name="android.telecom.INCLUDE_SELF_MANAGED_CALLS"
+                        android:value="true" />
+-            <!-- Indicates that this service's class may not be present in all builds.
+-                 This directs Telecom to verify class existence before attempting to bind,
+-                 in order to avoid a ClassNotFoundException. -->
+-            <meta-data android:name="android.telecom.CLASS_EXISTENCE_CHECK"
+-                       android:value="true" />
+             <intent-filter>
+                 <action android:name="android.telecom.InCallService"/>
+             </intent-filter>
+-- 
+2.55.0
+

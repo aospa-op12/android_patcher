@@ -1,0 +1,43 @@
+From 8511510f2e57596c20c2d61a315bc00f0bae3f7f Mon Sep 17 00:00:00 2001
+From: Duy Truong <duytruong@google.com>
+Date: Thu, 30 Apr 2026 12:29:05 -0700
+Subject: [PATCH 2/2] wpa_supplicant: Fix OOB read in get_eht_op_width
+
+EHT_OPERATION_ELEM_MIN_LEN was incorrectly defined as 1, which
+predated the addition of basic_eht_mcs_nss_set[4] to the
+ieee80211_eht_operation structure. This caused a potential
+heap out-of-bounds read in get_eht_operation_channel_width()
+when the element length was between 1 and 4 inclusive and
+the EHT_OPER_INFO_PRESENT flag was set, as it would try to
+access oper_info at offset 5.
+
+Updating EHT_OPERATION_ELEM_MIN_LEN to 5 ensures that the
+bounds check correctly accounts for the fixed-size fields
+preceding the operation information.
+
+Bug: 503551046
+Test: Manual reproduction with ASan confirmed the OOB read is fixed.
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:acaccea773865760d43afa1146beb84fe5f99916
+Merged-In: Ic94e85325e1c974105882b6f90ff5839f52c7141
+Change-Id: Ic94e85325e1c974105882b6f90ff5839f52c7141
+---
+ src/common/ieee802_11_defs.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/common/ieee802_11_defs.h b/src/common/ieee802_11_defs.h
+index 15f5865..6eb69e8 100644
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -2765,7 +2765,7 @@ struct ieee80211_he_mu_edca_parameter_set {
+ #define RNR_TBTT_INFO_MLD_PARAM2_LINK_DISABLED  0x20
+ 
+ /* IEEE Std 802.11be-2024, 9.4.2.321 - EHT Operation element */
+-#define EHT_OPERATION_ELEM_MIN_LEN                       1
++#define EHT_OPERATION_ELEM_MIN_LEN                       5
+ 
+ /* Figure 9-1074j: EHT Operation Parameters field format */
+ #define EHT_OPER_INFO_PRESENT                          BIT(0)
+-- 
+2.55.0
+

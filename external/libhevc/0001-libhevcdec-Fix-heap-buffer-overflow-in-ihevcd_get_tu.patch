@@ -1,0 +1,39 @@
+From d9f6d613088ca95ea42edb3ede30216527d8b286 Mon Sep 17 00:00:00 2001
+From: Vivek R Jadhav <jadhavvivek@google.com>
+Date: Tue, 5 May 2026 10:26:37 +0000
+Subject: [PATCH] libhevcdec: Fix heap buffer overflow in
+ ihevcd_get_tu_data_size
+
+ihevcd_get_tu_data_size() previously budgeted the tu_map using only
+luma TUs (num_luma_tu), while the initialization logic consumes space
+for both luma and chroma. This change updates the allocation to use
+num_tu to properly size the buffer
+
+Bug: 505000651
+Test: poc in the bug
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:ffc26dcdf3206e23b11e0820066a6c83732adc25
+Merged-In: I8ff89026f66addf34b18dbedf9001db292db8fe9
+Change-Id: I8ff89026f66addf34b18dbedf9001db292db8fe9
+---
+ decoder/ihevcd_utils.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ mode change 100755 => 100644 decoder/ihevcd_utils.c
+
+diff --git a/decoder/ihevcd_utils.c b/decoder/ihevcd_utils.c
+old mode 100755
+new mode 100644
+index b73f247..98c50e9
+--- a/decoder/ihevcd_utils.c
++++ b/decoder/ihevcd_utils.c
+@@ -318,7 +318,7 @@ WORD32 ihevcd_get_tu_data_size(WORD32 num_luma_samples)
+     tu_data_size += (num_ctb + 1) * sizeof(WORD32);
+ 
+     /* Size for storing tu map */
+-    tu_data_size += num_luma_tu * sizeof(UWORD8);
++    tu_data_size += num_tu * sizeof(UWORD8);
+ 
+     /* Size for storing tu_t for each TU */
+     tu_data_size += num_tu * sizeof(tu_t);
+-- 
+2.55.0
+

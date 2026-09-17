@@ -1,0 +1,49 @@
+From 783d9bf57c71207ae76619f38ab11e09a7bae42f Mon Sep 17 00:00:00 2001
+From: Shubang Lu <shubang@google.com>
+Date: Thu, 19 Mar 2026 16:21:22 -0700
+Subject: [PATCH 3/3] Fix Intent redirection issue in SetupPassthroughActivity
+
+Fix: 332883816
+Test: mmm
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:419fb3da8c29f17bb2d8681d48853fe481baf0ba
+Merged-In: I2a4cfa24b6c773cfa303e23de75b209bd6e7d83e
+Change-Id: I2a4cfa24b6c773cfa303e23de75b209bd6e7d83e
+(cherry picked from commit ff1fd33e2788bf37c6687f9b17c3bc36bd94968b)
+---
+ src/com/android/tv/SetupPassthroughActivity.java | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/com/android/tv/SetupPassthroughActivity.java b/src/com/android/tv/SetupPassthroughActivity.java
+index 2a4a556..87a66a0 100644
+--- a/src/com/android/tv/SetupPassthroughActivity.java
++++ b/src/com/android/tv/SetupPassthroughActivity.java
+@@ -21,6 +21,7 @@ import android.content.ActivityNotFoundException;
+ import android.content.ComponentName;
+ import android.content.Intent;
+ import android.media.tv.TvInputInfo;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Looper;
+@@ -116,6 +117,17 @@ public class SetupPassthroughActivity extends Activity {
+             InputSetupActionUtils.removeSetupIntent(extras);
+             setupIntent.putExtras(extras);
+             try {
++                if (Build.VERSION.SDK_INT >= 34) { // Android 14(U)
++                    String callingPackage = getLaunchedFromPackage();
++                    if (callingPackage == null || !callingPackage.equals(
++                            CommonConstants.BASE_PACKAGE)) {
++                        Log.w(TAG, "Calling package " + callingPackage
++                                + " is not trusted. Not forwarding intent.");
++                        finish();
++                        return;
++                    }
++                }
++
+                 ComponentName callingActivity = getCallingActivity();
+                 if (callingActivity == null
+                         || !callingActivity.getPackageName().equals(CommonConstants.BASE_PACKAGE)) {
+-- 
+2.55.0
+

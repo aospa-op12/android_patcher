@@ -1,0 +1,45 @@
+From 756c9627c562bc597a2aa8443af959aa2bbd18d4 Mon Sep 17 00:00:00 2001
+From: "Isaac J. Manjarres" <isaacmanjarres@google.com>
+Date: Fri, 17 Apr 2026 00:34:42 +0000
+Subject: [PATCH 2/2] ashmem_test: Add tests related to memfd's size file seals
+
+Add tests to ensure that ashmem_valid() does not pass given a
+memfd without the right set of size file seals.
+
+Bug: 498720726
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:5ceaa348e48cb98a0e69c8771f1bd57b818484ba
+Merged-In: I1eff526094c2aa99d2e7a2645f77c8b5ec881905
+Change-Id: I1eff526094c2aa99d2e7a2645f77c8b5ec881905
+---
+ libcutils/ashmem_test.cpp | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/libcutils/ashmem_test.cpp b/libcutils/ashmem_test.cpp
+index 2332ebe90f..16cd073929 100644
+--- a/libcutils/ashmem_test.cpp
++++ b/libcutils/ashmem_test.cpp
+@@ -559,3 +559,20 @@ TEST_F(MemfdTest, AshmemCompatUnpinningTest) {
+     ASSERT_EQ(0, ioctl(fd, ASHMEM_PURGE_ALL_CACHES, 0));
+     ASSERT_EQ(ASHMEM_NOT_PURGED, ioctl(fd, ASHMEM_PIN, &pin));
+ }
++
++TEST(AshmemValidTest, UnsealedMemfdTest) {
++    // This code needs to build on API levels before 30, so we can't use the libc wrapper.
++    unique_fd fd(memfd_create("none", MFD_CLOEXEC | MFD_ALLOW_SEALING));
++    ASSERT_TRUE(fd >= 0);
++    // memfds without F_SEAL_GROW and F_SEAL_SHRINK applied should not be valid.
++    ASSERT_FALSE(ashmem_valid(fd));
++
++    // All or nothing; not just one seal.
++    ASSERT_EQ(fcntl(fd, F_ADD_SEALS, F_SEAL_GROW), 0);
++    ASSERT_FALSE(ashmem_valid(fd));
++
++    unique_fd fd2(memfd_create("none", MFD_CLOEXEC | MFD_ALLOW_SEALING));
++    ASSERT_TRUE(fd2 >= 0);
++    ASSERT_EQ(fcntl(fd2, F_ADD_SEALS, F_SEAL_SHRINK), 0);
++    ASSERT_FALSE(ashmem_valid(fd2));
++}
+\ No newline at end of file
+-- 
+2.55.0
+

@@ -1,0 +1,62 @@
+From 5f16da439bd3655929df42e5dc955ca82c87cfea Mon Sep 17 00:00:00 2001
+From: Brian Delwiche <delwiche@google.com>
+Date: Tue, 7 Jul 2026 10:42:39 -0700
+Subject: [PATCH 10/10] Fix buffer overflow in UUID parsing
+
+The `btif_split_uuids_string` function was called with a hardcoded
+maximum number of UUIDs, potentially exceeding the size of the provided
+buffer. This change updates the call to use the actual buffer capacity
+derived from `prop->len`, preventing buffer overflows.
+
+Companion to ag/40421805, can be backported.
+
+Test: atest net_test_btif
+Bug: 522371916
+Flag: EXEMPT BUGFIX
+Change-Id: Ib6041c55f705afd9e9a8b980d7af9ba23aae2f02
+---
+ system/btif/src/btif_storage.cc       |  3 ++-
+ system/btif/test/btif_storage_test.cc | 16 ++++++++++++++++
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/system/btif/src/btif_storage.cc b/system/btif/src/btif_storage.cc
+index 05781ac17a8..0cd0c27304e 100644
+--- a/system/btif/src/btif_storage.cc
++++ b/system/btif/src/btif_storage.cc
+@@ -320,7 +320,8 @@ static bool cfg2prop(const RawAddress* addr, bt_property_t* prop) {
+ 
+       if (btif_config_get_str(bdstr, key, value, &size)) {
+         Uuid* p_uuid = reinterpret_cast<Uuid*>(prop->val);
+-        size_t num_uuids = btif_split_uuids_string(value, p_uuid, BT_MAX_NUM_UUIDS);
++        size_t num_uuids =
++                btif_split_uuids_string(value, p_uuid, prop->len / sizeof(Uuid));
+         prop->len = num_uuids * sizeof(Uuid);
+         ret = true;
+       } else {
+diff --git a/system/btif/test/btif_storage_test.cc b/system/btif/test/btif_storage_test.cc
+index 6c9ef96cfa4..6042e8c52a9 100644
+--- a/system/btif/test/btif_storage_test.cc
++++ b/system/btif/test/btif_storage_test.cc
+@@ -51,3 +51,19 @@ TEST(BtifStorageTest, test_uuid_split_partial) {
+   size_t num_uuids = btif_split_uuids_string(s1, uuids, 1);
+   EXPECT_EQ(num_uuids, 1u);
+ }
++
++TEST(BtifStorageTest, test_uuid_split_zero_limit) {
++  const char* s1 = "e39c6285-867f-4b1d-9db0-35fbd9aebf22 e39c6285-867f-4b1d-9db0-35fbd9aebf23";
++
++  Uuid uuids[2];
++  // Intentionally set all to verify they aren't overwritten when limit is 0
++  const uint8_t fill[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
++                          0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
++  uuids[0] = Uuid::From128BitBE(fill);
++  uuids[1] = Uuid::From128BitBE(fill);
++
++  size_t num_uuids = btif_split_uuids_string(s1, uuids, 0);
++  EXPECT_EQ(num_uuids, 0u);
++  EXPECT_EQ(0, memcmp(uuids[0].To128BitBE().data(), fill, sizeof(fill)));
++  EXPECT_EQ(0, memcmp(uuids[1].To128BitBE().data(), fill, sizeof(fill)));
++}
+-- 
+2.55.0
+

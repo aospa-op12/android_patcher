@@ -1,0 +1,261 @@
+From 5d58346aaf7666a9675ae61a95f36a20399da8da Mon Sep 17 00:00:00 2001
+From: Garvita Jain <garvitajain@google.com>
+Date: Tue, 31 Mar 2026 06:52:37 +0000
+Subject: [PATCH 1/5] Restrict geolocation metadata access in SQL query clauses
+
+* Return empty results if geolocation columns are used in SQL SELECTION,
+  GROUP_BY, or HAVING clauses.
+* Replace geolocation columns with NULL in the SORT_ORDER clause instead of blocking the SQL query.
+* Ensure column name matching is case-insensitive for both uppercase and lowercase variations.
+* Add comprehensive tests covering various clause combinations and case-insensitivity.
+
+BUG: 484928416
+Test: atest MediaProviderTest
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:914b50b7bbf47150e571972f8d10f614329933d7
+Merged-In: I4833eec18c779846e86463297e035fc928243d1c
+Change-Id: I4833eec18c779846e86463297e035fc928243d1c
+---
+ .../providers/media/MediaProvider.java        |  55 +++++---
+ .../providers/media/MediaProviderTest.java    | 123 ++++++++++--------
+ 2 files changed, 106 insertions(+), 72 deletions(-)
+
+diff --git a/src/com/android/providers/media/MediaProvider.java b/src/com/android/providers/media/MediaProvider.java
+index 119d8e7..4a8e5e2 100644
+--- a/src/com/android/providers/media/MediaProvider.java
++++ b/src/com/android/providers/media/MediaProvider.java
+@@ -6930,29 +6930,44 @@ public class MediaProvider extends ContentProvider {
+             appendWhereStandalone(qb, ownerPackageMatchClause);
+         }
+ 
+-        // Prevent a query from returning results if the selection clauses query on latitude and
+-        // longitude. Only return results if these columns are present in the sort clause to avoid
+-        // breaking any existing usage but return them in any arbitrary fashion instead of actually
+-        // sorting them.
++        filterGeolocationClauses(qb, extras, type);
++
++        return qb;
++    }
++
++    /**
++     * Prevent a query from returning results if the selection clauses query on latitude and
++     * longitude. Only return results if these columns are present in the sort clause to avoid
++     * breaking any existing usage but return them in any arbitrary fashion instead of actually
++     * sorting them.
++     */
++    private void filterGeolocationClauses(@NonNull SQLiteQueryBuilder qb, @NonNull Bundle extras,
++            int type) {
++        if (!indexMediaLatitudeLongitude() || isCallingPackageSelf()) {
++                return;
++        }
++
+         List<String> filterClauses = getClausesForFilteringGeolocationData(extras, type);
+-        if (indexMediaLatitudeLongitude() && !isCallingPackageSelf() && !filterClauses.isEmpty()) {
+-            if (filterClauses.contains(QUERY_ARG_SQL_SORT_ORDER)) {
+-                String sortArgs = extras.getString(QUERY_ARG_SQL_SORT_ORDER);
+-                if (sortArgs != null) {
+-                    if (sortArgs.contains(LATITUDE)) {
+-                        sortArgs = sortArgs.replace(LATITUDE, /* replacement */ "NULL");
+-                    }
+-                    if (sortArgs.contains(LONGITUDE)) {
+-                        sortArgs = sortArgs.replace(LONGITUDE, /* replacement */ "NULL");
+-                    }
+-                    extras.putString(QUERY_ARG_SQL_SORT_ORDER, sortArgs);
+-                }
+-            } else {
+-                final String geolocationClause = "FALSE";
+-                appendWhereStandalone(qb, geolocationClause);
++
++        if (filterClauses.isEmpty()) {
++                return;
++        }
++
++        if (filterClauses.contains(QUERY_ARG_SQL_SELECTION) || filterClauses.contains(
++                QUERY_ARG_SQL_HAVING) || filterClauses.contains(QUERY_ARG_SQL_GROUP_BY)) {
++            // Don't return any results if the location metadata columns are queried in the
++            // selection clauses
++            final String geolocationClause = "FALSE";
++            appendWhereStandalone(qb, geolocationClause);
++        } else if (filterClauses.contains(QUERY_ARG_SQL_SORT_ORDER)) {
++            // Do not sort query results if the sort clause includes location metadata columns
++            String sortArgs = extras.getString(QUERY_ARG_SQL_SORT_ORDER);
++            if (sortArgs != null) {
++                sortArgs = sortArgs.replaceAll("(?i)\\b" + LATITUDE + "\\b", "NULL");
++                sortArgs = sortArgs.replaceAll("(?i)\\b" + LONGITUDE + "\\b", "NULL");
++                extras.putString(QUERY_ARG_SQL_SORT_ORDER, sortArgs);
+             }
+         }
+-        return qb;
+     }
+ 
+     private List<String> getClausesForFilteringGeolocationData(
+diff --git a/tests/src/com/android/providers/media/MediaProviderTest.java b/tests/src/com/android/providers/media/MediaProviderTest.java
+index 048f8e7..f4e9bae 100644
+--- a/tests/src/com/android/providers/media/MediaProviderTest.java
++++ b/tests/src/com/android/providers/media/MediaProviderTest.java
+@@ -2347,8 +2347,8 @@ public class MediaProviderTest {
+             File file = stage(R.raw.lg_g4_iso_800_jpg, new File(downloads, testFileName));
+             Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
+ 
+-            try (Cursor cursor = sContentResolver.query(testFileUri, projection, null, null,
+-                    null)) {
++            try (Cursor cursor = sContentResolver.query(testFileUri, projection,
++                    /* selection */ null, /* selectionArgs */ null, /* sortOrder */null)) {
+                 assertNotNull(cursor);
+                 int nameIndex = cursor.getColumnIndex(ImageColumns.DISPLAY_NAME);
+                 int latitudeIndex = cursor.getColumnIndex(ImageColumns.LATITUDE);
+@@ -2372,26 +2372,33 @@ public class MediaProviderTest {
+     @RequiresFlagsEnabled(Flags.FLAG_INDEX_MEDIA_LATITUDE_LONGITUDE)
+     public void testQueryingMediaGeolocationDataInSelectionShouldReturnEmptyCursor()
+             throws Exception {
+-        final File downloads = Environment.getExternalStoragePublicDirectory(
+-                Environment.DIRECTORY_DOWNLOADS);
+-        File file = stage(R.raw.lg_g4_iso_800_jpg,
+-                new File(downloads, "test" + System.nanoTime() + ".jpg"));
+-        Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
+-
+         String[] projection = new String[] {
+                 ImageColumns._ID,
+                 ImageColumns.DISPLAY_NAME
+         };
+-        String selection = ImageColumns.LATITUDE + " = ?";
+-        String[] selectionArgs = new String[] { "67.8" };
+-        try (Cursor cursor = sContentResolver.query(testFileUri, projection, selection,
+-                selectionArgs, null)) {
+-            assertNotNull(cursor);
+-            // Should no return any results
+-            assertThat(cursor.getCount()).isEqualTo(0);
+-        } finally {
+-            // Clean up
+-            file.delete();
++
++        String[] selection = new String[]{
++                ImageColumns.LATITUDE + "=? OR " + ImageColumns.LONGITUDE + "=?",
++                "LATITUDE=? OR LONGITUDE=?"};
++
++        String[] selectionArgs = new String[]{"67.8", "67.8"};
++
++        for (String selectionClause : selection) {
++            final File downloads = Environment.getExternalStoragePublicDirectory(
++                    Environment.DIRECTORY_DOWNLOADS);
++            File file = stage(R.raw.lg_g4_iso_800_jpg,
++                    new File(downloads, "test" + System.nanoTime() + ".jpg"));
++            Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
++
++            try (Cursor cursor = sContentResolver.query(testFileUri, projection, selectionClause,
++                    selectionArgs, /* sortOrder */ null)) {
++                assertNotNull(cursor);
++                // Should not return any results
++                assertThat(cursor.getCount()).isEqualTo(0);
++            } finally {
++                // Clean-up
++                file.delete();
++            }
+         }
+     }
+ 
+@@ -2399,28 +2406,33 @@ public class MediaProviderTest {
+     @RequiresFlagsEnabled(Flags.FLAG_INDEX_MEDIA_LATITUDE_LONGITUDE)
+     public void testQueryingMediaGeolocationDataInOrderByShouldReturnNonEmptyCursor()
+             throws Exception {
+-        String testFileName = "test" + System.nanoTime() + ".jpg";
+-        final File downloads = Environment.getExternalStoragePublicDirectory(
+-                Environment.DIRECTORY_DOWNLOADS);
+-        File file = stage(R.raw.lg_g4_iso_800_jpg, new File(downloads, testFileName));
+-        Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
+-
+         String[] projection = new String[] {
+                 ImageColumns._ID,
+                 ImageColumns.DISPLAY_NAME
+         };
+-        try (Cursor cursor = sContentResolver.query(testFileUri, projection, null, null,
+-                ImageColumns.LONGITUDE);) {
+-            assertNotNull(cursor);
+-            // Should return non-empty results
+-            assertThat(cursor.getCount()).isEqualTo(1);
+-            int nameIndex = cursor.getColumnIndex(ImageColumns.DISPLAY_NAME);
+-            cursor.moveToFirst();
+-            // Assert name column accessed is non-null and valid
+-            assertTrue(cursor.getString(nameIndex).contains(testFileName));
+-        } finally {
+-            // Clean up
+-            file.delete();
++        String[] sortOrders = new String[]{
++                ImageColumns.LATITUDE, ImageColumns.LONGITUDE, "LATITUDE", "LONGITUDE"};
++
++        for (String sortOrder : sortOrders) {
++            String testFileName = "test" + System.nanoTime() + ".jpg";
++            final File downloads = Environment.getExternalStoragePublicDirectory(
++                    Environment.DIRECTORY_DOWNLOADS);
++            File file = stage(R.raw.lg_g4_iso_800_jpg, new File(downloads, testFileName));
++            Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
++
++            try (Cursor cursor = sContentResolver.query(testFileUri, projection,
++                    /* selection */ null, /* selectionArgs */ null, /* sortOrder */ sortOrder)) {
++                assertNotNull(cursor);
++                // Should return non-empty results even if sorting by restricted column
++                assertThat(cursor.getCount()).isEqualTo(1);
++                int nameIndex = cursor.getColumnIndex(ImageColumns.DISPLAY_NAME);
++                cursor.moveToFirst();
++                // Assert name column accessed is non-null and valid
++                assertTrue(cursor.getString(nameIndex).contains(testFileName));
++            } finally {
++                // Clean up
++                file.delete();
++            }
+         }
+     }
+ 
+@@ -2428,26 +2440,33 @@ public class MediaProviderTest {
+     @RequiresFlagsEnabled(Flags.FLAG_INDEX_MEDIA_LATITUDE_LONGITUDE)
+     public void testQueryingMediaGeolocationDataInGroupByAndHavingShouldReturnEmptyCursor()
+             throws Exception {
+-        String testFileName = "test" + System.nanoTime() + ".jpg";
+-        final File downloads = Environment.getExternalStoragePublicDirectory(
+-                Environment.DIRECTORY_DOWNLOADS);
+-        File file = stage(R.raw.lg_g4_iso_800_jpg, new File(downloads, testFileName));
+-        Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
+-
+         String[] projection = new String[] {
+                 ImageColumns._ID,
+                 ImageColumns.DISPLAY_NAME
+         };
+-        Bundle queryArgs = new Bundle();
+-        queryArgs.putString(QUERY_ARG_SQL_GROUP_BY, ImageColumns.LATITUDE);
+-        queryArgs.putString(QUERY_ARG_SQL_HAVING, ImageColumns.LONGITUDE + " > 100");
+-        try (Cursor cursor = sContentResolver.query(testFileUri, projection, queryArgs, null);) {
+-            assertNotNull(cursor);
+-            // Should not return any results
+-            assertThat(cursor.getCount()).isEqualTo(0);
+-        } finally {
+-            // Clean up
+-            file.delete();
++        String[] columnNames =
++                new String[]{ImageColumns.LATITUDE, ImageColumns.LONGITUDE, "LATITUDE",
++                        "LONGITUDE"};
++
++        for (String column : columnNames) {
++            String testFileName = "test" + System.nanoTime() + ".jpg";
++            final File downloads = Environment.getExternalStoragePublicDirectory(
++                    Environment.DIRECTORY_DOWNLOADS);
++            File file = stage(R.raw.lg_g4_iso_800_jpg, new File(downloads, testFileName));
++            Uri testFileUri = MediaStore.scanFile(sContentResolver, file);
++
++            Bundle queryArgs = new Bundle();
++            queryArgs.putString(QUERY_ARG_SQL_GROUP_BY, column);
++            queryArgs.putString(QUERY_ARG_SQL_HAVING, column + " > 100");
++            try (Cursor cursor = sContentResolver.query(testFileUri, projection, queryArgs,
++                    /* cancellationSignal */ null)) {
++                assertNotNull(cursor);
++                // Should not return any results for non-self caller
++                assertThat(cursor.getCount()).isEqualTo(0);
++            } finally {
++                // Clean up
++                file.delete();
++            }
+         }
+     }
+ 
+-- 
+2.55.0
+

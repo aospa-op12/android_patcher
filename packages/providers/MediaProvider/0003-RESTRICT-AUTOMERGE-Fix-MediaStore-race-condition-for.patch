@@ -1,0 +1,287 @@
+From 0c174097512c5e53de150a4400fe309572d86a5e Mon Sep 17 00:00:00 2001
+From: Mohit kumar <imohit@google.com>
+Date: Mon, 4 May 2026 20:32:16 +0000
+Subject: [PATCH 3/5] RESTRICT AUTOMERGE Fix MediaStore race condition for
+ pending files
+
+Resolves a vulnerability where a malicious app could preemptively squat a MediaStore namespace.
+
+This CL fixes the vulnerability by securing namespace ownership:
+ 1. Explicit Rename Context: Uses explicit parameter passing to identify the target destination of an active rename operation during database conflict resolution.
+ 2. Verified Squatter Deletion: Enhances the SQLiteConstraintException handler in handleNonExistingEntryFile to identify squatter rows by comparing the conflict path with the active rename context. Stale rows are forcefully removed using the consolidated deleteEntryForPath helper, and the update is retried within the same transaction to prevent re-insertion.
+ 3. Implements checkIfPathAlreadyExists to aggressively prune stale database entries before resolving rename paths, ensuring names can be reclaimed safely.
+
+Bug: 395640294
+Test: atest MediaProviderTests:com.android.providers.media.MediaProviderTest#testPendingUpdate_SquatterRowDeleted
+Test: atest MediaProviderTests:com.android.providers.media.MediaProviderTest#testPendingUpdate_SquatterRowFileExists
+Flag: EXEMPT BUGFIX
+
+Change-Id: Ica7cec90bb2d1870ce8902fa3d3e9899d59a743b
+---
+ .../providers/media/MediaProvider.java        |  92 ++++++++++++++--
+ .../providers/media/MediaProviderTest.java    | 103 ++++++++++++++++++
+ 2 files changed, 185 insertions(+), 10 deletions(-)
+
+diff --git a/src/com/android/providers/media/MediaProvider.java b/src/com/android/providers/media/MediaProvider.java
+index 4a8e5e2..0aaaf7a 100644
+--- a/src/com/android/providers/media/MediaProvider.java
++++ b/src/com/android/providers/media/MediaProvider.java
+@@ -9901,6 +9901,7 @@ public class MediaProvider extends ContentProvider {
+         // blend in current values and recalculate path
+         final boolean allowMovement = extras.getBoolean(MediaStore.QUERY_ARG_ALLOW_MOVEMENT,
+                 !isCallingPackageSelf());
++        String renameAfterPath = null;
+         if (containsAny(initialValues.keySet(), sPlacementColumns)
+                 && !initialValues.containsKey(MediaColumns.DATA)
+                 && !isThumbnail
+@@ -9997,8 +9998,11 @@ public class MediaProvider extends ContentProvider {
+                 }
+ 
+ 
++                checkIfPathAlreadyExists(helper, beforeVolume, afterPath);
++
+                 Logging.logIfLoggable(TAG, "Moving " + beforePath + " to " + afterPath,
+                         Log.DEBUG, /* logOnlyIfDebuggable */true);
++                renameAfterPath = afterPath;
+                 try {
+                     Os.rename(beforePath, afterPath);
+                     markPathAsDeletedAndInvalidateFuseDentry(beforePath);
+@@ -10109,7 +10113,8 @@ public class MediaProvider extends ContentProvider {
+             }
+         }
+ 
+-        count = updateAllowingReplace(qb, helper, values, userWhere, userWhereArgs);
++        count = updateAllowingReplace(qb, helper, values, userWhere, userWhereArgs,
++                renameAfterPath);
+ 
+         // If the caller tried (and failed) to update metadata, the file on disk
+         // might have changed, to scan it to collect the latest metadata.
+@@ -10231,7 +10236,8 @@ public class MediaProvider extends ContentProvider {
+      */
+     private int updateAllowingReplace(@NonNull SQLiteQueryBuilder qb,
+             @NonNull DatabaseHelper helper, @NonNull ContentValues values, String userWhere,
+-            String[] userWhereArgs) throws SQLiteConstraintException {
++            String[] userWhereArgs, @Nullable String renameAfterPath)
++            throws SQLiteConstraintException {
+         return helper.runWithTransaction((db) -> {
+             try {
+                 return qb.update(helper, values, userWhere, userWhereArgs);
+@@ -10240,20 +10246,19 @@ public class MediaProvider extends ContentProvider {
+                 // explicitly inserted db row to this file. We have to resolve this update with a
+                 // replace.
+ 
++                final String path = values.getAsString(FileColumns.DATA);
++                final int handleCount = handleNonExistingEntryFile(qb, helper, values,
++                        userWhere, userWhereArgs, path, renameAfterPath, e);
++                if (handleCount != -1) {
++                    return handleCount;
++                }
++
+                 if (getCallingPackageTargetSdkVersion() >= Build.VERSION_CODES.R) {
+                     // We don't support replace for non-legacy apps. Non legacy apps should have
+                     // clearer interactions with MediaProvider.
+                     throw e;
+                 }
+ 
+-                final String path = values.getAsString(FileColumns.DATA);
+-
+-                // We will only handle UNIQUE constraint error for FileColumns.DATA. We will not try
+-                // update and replace if no file exists for conflicting db row.
+-                if (path == null || !new File(path).exists()) {
+-                    throw e;
+-                }
+-
+                 final Uri uri = FileUtils.getContentUriForPath(path);
+                 final boolean allowHidden = isCallingPackageAllowedHidden();
+                 // The db row which caused UNIQUE constraint error may not match all column values
+@@ -10278,6 +10283,73 @@ public class MediaProvider extends ContentProvider {
+         });
+     }
+ 
++    /** Resolves conflict by deleting stale database entry if file doesn't exist on disk. */
++    private int handleNonExistingEntryFile(SQLiteQueryBuilder qb,
++            DatabaseHelper helper, ContentValues values, String userWhere,
++            String[] userWhereArgs, String path, @Nullable String renameAfterPath,
++            SQLiteConstraintException e)
++            throws SQLiteConstraintException {
++        if (path == null) {
++            throw e;
++        }
++
++        if (Objects.equals(path, renameAfterPath)) {
++            if (deleteEntryForPath(helper, path) > 0) {
++                return qb.update(helper, values, userWhere, userWhereArgs);
++            }
++        }
++        return -1;
++    }
++
++    /** Deletes database entry for the given path. */
++    private int deleteEntryForPath(DatabaseHelper helper, String path) {
++        final LocalCallingIdentity token = clearLocalCallingIdentity();
++        try {
++            return helper.runWithTransaction((db) -> {
++                try {
++                    int count = db.delete(Files.TABLE, "_data=?", new String[]{path});
++                    if (count > 0) {
++                        Log.v(TAG, "Deleted stale entry");
++                    }
++                    return count;
++                } catch (Exception e) {
++                    Log.e(TAG, "Failure in deleting stale entry", e);
++                }
++                return 0;
++            });
++        } finally {
++            restoreLocalCallingIdentity(token);
++        }
++    }
++
++    /** Checks if a file path exists and verifies caller permission if it does. */
++    private void checkIfPathAlreadyExists(DatabaseHelper helper, String volume, String afterPath) {
++        final LocalCallingIdentity token = clearLocalCallingIdentity();
++        long id = -1;
++        try (Cursor c = queryForSingleItem(MediaStore.Files.getContentUri(volume),
++                new String[]{BaseColumns._ID},
++                MediaColumns.DATA + "=?", new String[]{afterPath}, null)) {
++            if (c == null) {
++                return;
++            }
++            id = c.getLong(c.getColumnIndex(BaseColumns._ID));
++            if (!new File(afterPath).exists()) {
++                // delete stale entry
++                deleteEntryForPath(helper, afterPath);
++                return;
++            }
++        } catch (FileNotFoundException e) {
++            // Path does not exist
++            return;
++        } finally {
++            restoreLocalCallingIdentity(token);
++        }
++
++        Uri uri = MediaStore.Files.getContentUri(volume, id);
++        // If file and DB row both exist, verify caller's write access on the row
++        enforceCallingPermission(uri, Bundle.EMPTY, /* forWrite */ true);
++    }
++
+     /**
+      * Update the internal table of {@link MediaStore.Audio.Playlists.Members}
+      * by parsing the playlist file on disk and resolving it against scanned
+diff --git a/tests/src/com/android/providers/media/MediaProviderTest.java b/tests/src/com/android/providers/media/MediaProviderTest.java
+index f4e9bae..d203dab 100644
+--- a/tests/src/com/android/providers/media/MediaProviderTest.java
++++ b/tests/src/com/android/providers/media/MediaProviderTest.java
+@@ -2514,6 +2514,109 @@ public class MediaProviderTest {
+         sItemsProvider = new ItemsProvider(sIsolatedContext);
+     }
+ 
++    @Test
++    public void testPendingUpdate_SquatterRowDeleted() throws Exception {
++        final String displayName = "test_race_condition_" + System.nanoTime() + ".jpg";
++        final Uri imagesUri = MediaStore.Images.Media.getContentUri(
++                MediaStore.VOLUME_EXTERNAL_PRIMARY);
++
++        // 1. First insert a pending row
++        final ContentValues targetValues = new ContentValues();
++        targetValues.put(MediaColumns.DISPLAY_NAME, displayName);
++        targetValues.put(MediaColumns.MIME_TYPE, "image/jpeg");
++        targetValues.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
++        targetValues.put(MediaColumns.IS_PENDING, 1);
++        final Uri targetUri = sIsolatedResolver.insert(imagesUri, targetValues);
++        assertNotNull(targetUri);
++
++        // 2. Then insert a 'squatter' row with IS_PENDING=0
++        final ContentValues attackerValues = new ContentValues();
++        attackerValues.put(MediaColumns.DISPLAY_NAME, displayName);
++        attackerValues.put(MediaColumns.MIME_TYPE, "image/jpeg");
++        attackerValues.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
++        attackerValues.put(MediaColumns.IS_PENDING, 0);
++        final Uri attackerUri = sIsolatedResolver.insert(imagesUri, attackerValues);
++        assertNotNull(attackerUri);
++
++        // 3. Update the first row to publish it (clear IS_PENDING)
++        targetValues.clear();
++        targetValues.put(MediaColumns.IS_PENDING, 0);
++        Bundle updateExtras = new Bundle();
++        updateExtras.putBoolean(MediaStore.QUERY_ARG_ALLOW_MOVEMENT, true);
++        // This update should succeed, and internally it should delete the 'squatter' row
++        // because the physical file does not exist.
++        assertEquals(1, sIsolatedResolver.update(targetUri, targetValues, updateExtras));
++
++        // 4. Verify 'squatter' row is gone by querying attackerUri
++        try (Cursor c = sIsolatedResolver.query(attackerUri, null, null, null, null)) {
++            // The query should return 0 rows if the squatter entry was successfully deleted
++            assertNotNull(c);
++            assertEquals(0, c.getCount());
++        }
++    }
++
++    @Test
++    public void testPendingUpdate_SquatterRowFileExists() throws Exception {
++        final File dir = Environment
++                .getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
++        final String baseName = "test" + System.nanoTime();
++        final String displayName = baseName + ".jpg";
++        final Uri imagesUri = MediaStore.Images.Media.getContentUri(
++                MediaStore.VOLUME_EXTERNAL_PRIMARY);
++
++        // 1. First insert a pending row
++        final ContentValues targetValues = new ContentValues();
++        targetValues.put(MediaColumns.DISPLAY_NAME, displayName);
++        targetValues.put(MediaColumns.MIME_TYPE, "image/jpeg");
++        targetValues.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
++        targetValues.put(MediaColumns.IS_PENDING, 1);
++        final Uri targetUri = sIsolatedResolver.insert(imagesUri, targetValues);
++        assertNotNull(targetUri);
++
++        // 2. Then insert a 'squatter' row with IS_PENDING=0
++        final ContentValues attackerValues = new ContentValues();
++        attackerValues.put(MediaColumns.DISPLAY_NAME, displayName);
++        attackerValues.put(MediaColumns.MIME_TYPE, "image/jpeg");
++        attackerValues.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
++        attackerValues.put(MediaColumns.IS_PENDING, 0);
++        final Uri attackerUri = sIsolatedResolver.insert(imagesUri, attackerValues);
++        assertNotNull(attackerUri);
++
++        // Now that the 'squatter' row has claimed the original displayName,
++        // physically stage the file to ensure the file exists on disk.
++        final File file = new File(dir, displayName);
++        try {
++            stage(R.raw.lg_g4_iso_800_jpg, file);
++
++            // 3. Update the first row to publish it (clear IS_PENDING)
++            targetValues.clear();
++            targetValues.put(MediaColumns.IS_PENDING, 0);
++            Bundle updateExtras = new Bundle();
++            updateExtras.putBoolean(MediaStore.QUERY_ARG_ALLOW_MOVEMENT, true);
++
++            // This update should succeed, but internally it will rename to a unique name
++            // because the physical file exists and the 'squatter' row is valid.
++            assertEquals(1, sIsolatedResolver.update(targetUri, targetValues, updateExtras));
++
++            // 4. Verify 'squatter' row is NOT gone
++            try (Cursor c = sIsolatedResolver.query(attackerUri, null, null, null, null)) {
++                assertNotNull(c);
++                assertEquals(1, c.getCount());
++            }
++
++            // 5. Verify the first row's file was given a unique name
++            try (Cursor c = sIsolatedResolver.query(targetUri,
++                    new String[]{MediaColumns.DISPLAY_NAME, MediaColumns.DATA}, null, null, null)) {
++                assertNotNull(c);
++                assertEquals(1, c.getCount());
++                c.moveToFirst();
++                assertNotEquals(displayName, c.getString(0));
++            }
++        } finally {
++            file.delete();
++        }
++    }
++
+     @Test
+     public void testGetType() throws Exception {
+         final File dir = Environment
+-- 
+2.55.0
+

@@ -1,0 +1,55 @@
+From 9e9380375258fe4b42fec786e2ee68802e10c207 Mon Sep 17 00:00:00 2001
+From: Nicolas Geoffray <ngeoffray@google.com>
+Date: Fri, 15 May 2026 10:54:35 +0100
+Subject: [PATCH] Make the runtime-generated app image read-only
+
+Make the app image (.art file) generated at runtime by
+RuntimeImage::WriteImageToDisk read-only (permissions 0444)
+once it is successfully written and moved to its final path.
+There is no need to keep the file writable once it is done,
+and making it read-only helps prevent tampering.
+
+If we fail to make the image read-only, we discard the image
+by deleting it and returning an error to ensure we don't leave
+a writable image behind.
+
+Bug: 489675413
+Test: atest art_standalone_runtime_tests
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:a18d72596e17970c975ea556cba1901a2ec721bf
+Merged-In: If93791db692fb4e15fb322bf0a5c2cc5299384c4
+Change-Id: If93791db692fb4e15fb322bf0a5c2cc5299384c4
+---
+ runtime/runtime_image.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/runtime/runtime_image.cc b/runtime/runtime_image.cc
+index cd002aa0a8..49eecc6012 100644
+--- a/runtime/runtime_image.cc
++++ b/runtime/runtime_image.cc
+@@ -17,6 +17,7 @@
+ #include "runtime_image.h"
+ 
+ #include <lz4.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include "android-base/file.h"
+@@ -1914,6 +1915,14 @@ bool RuntimeImage::WriteImageToDisk(std::string* error_msg) {
+     return false;
+   }
+ 
++  // Make the file read-only immediately after creation to prevent tampering
++  // during the generation window. Writes to the open file descriptor will
++  // still succeed.
++  if (fchmod(image_file->Fd(), S_IRUSR | S_IRGRP | S_IROTH) != 0) {
++    *error_msg = "Failed to make runtime image read-only: " + std::string(strerror(errno));
++    return false;
++  }
++
+   std::vector<uint8_t> full_data(image->GetHeader()->GetImageSize());
+   image->FillData(full_data);
+ 
+-- 
+2.55.0
+

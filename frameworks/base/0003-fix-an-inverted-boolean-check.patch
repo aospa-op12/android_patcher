@@ -1,0 +1,33 @@
+From 397fa26b19ecfee2dbac7d6e189babb086e8e5e6 Mon Sep 17 00:00:00 2001
+From: Song Chun Fan <schfan@google.com>
+Date: Wed, 8 Apr 2026 10:26:25 -0700
+Subject: [PATCH 03/27] fix an inverted boolean check
+
+The boolean check was inverted during the porting from V1 to V2.
+
+BUG: 480976221
+Test: atest com.android.security.bug_480976221.HostsideTest
+FLAG: EXEMPT BUGFIX
+Change-Id: I6c336109c5422170d993adba901d5a025217baa1
+(cherry picked from commit 9dbc12bb1ebbab44ae1a2df571976b70fb2ead2e)
+Merged-In: I6c336109c5422170d993adba901d5a025217baa1
+---
+ .../com/android/packageinstaller/v2/model/InstallRepository.kt  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/packages/PackageInstaller/src/com/android/packageinstaller/v2/model/InstallRepository.kt b/packages/PackageInstaller/src/com/android/packageinstaller/v2/model/InstallRepository.kt
+index f35608bf03f8..aee68354fb6b 100644
+--- a/packages/PackageInstaller/src/com/android/packageinstaller/v2/model/InstallRepository.kt
++++ b/packages/PackageInstaller/src/com/android/packageinstaller/v2/model/InstallRepository.kt
+@@ -352,7 +352,7 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
+ 
+         if (!TextUtils.equals(installerPackageNameFromIntent, callerInfo.packageName)
+             && callerInfo.packageName != null
+-            && isPermissionGranted(
++            && !isPermissionGranted(
+                 packageManager, Manifest.permission.INSTALL_PACKAGES, callerInfo.packageName
+             )
+         ) {
+-- 
+2.55.0
+

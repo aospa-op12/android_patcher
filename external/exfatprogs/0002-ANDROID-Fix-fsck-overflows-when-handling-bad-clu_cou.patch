@@ -1,0 +1,149 @@
+From 15894dbe78b8732bf46d1564032f4101092f6160 Mon Sep 17 00:00:00 2001
+From: David Anderson <dvander@google.com>
+Date: Mon, 1 Jun 2026 21:17:42 -0700
+Subject: [PATCH 2/2] ANDROID: Fix fsck overflows when handling bad clu_count
+ or vol_length fields.
+
+Bug: 508645975
+Test: new exfatprogs test case
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:9befb98273053c48f9b0df810090f4c88e42706a
+Merged-In: Ic8223079d3612162b7ddc7c35c53098efef2f707
+Change-Id: Ic8223079d3612162b7ddc7c35c53098efef2f707
+---
+ fsck/fsck.c                               |  20 ++++++++++++++++++--
+ include/libexfat.h                        |   2 +-
+ tests/clu_count_overflow/exfat.img.tar.xz | Bin 0 -> 3636 bytes
+ 3 files changed, 19 insertions(+), 3 deletions(-)
+ create mode 100644 tests/clu_count_overflow/exfat.img.tar.xz
+
+diff --git a/fsck/fsck.c b/fsck/fsck.c
+index 2fd7194..8ebf100 100644
+--- a/fsck/fsck.c
++++ b/fsck/fsck.c
+@@ -427,8 +427,7 @@ static int read_boot_region(struct exfat_blk_dev *bd, struct pbr **pbr,
+ 		goto err;
+ 	}
+ 
+-	if (le64_to_cpu(bs->bsx.vol_length) * EXFAT_SECTOR_SIZE(bs) >
+-			bd->size) {
++	if (le64_to_cpu(bs->bsx.vol_length) > (bd->size >> bs->bsx.sect_size_bits)) {
+ 		if (verbose)
+ 			exfat_err("too large sector count: %" PRIu64 ", expected: %llu\n",
+ 				  le64_to_cpu(bs->bsx.vol_length),
+@@ -436,6 +435,23 @@ static int read_boot_region(struct exfat_blk_dev *bd, struct pbr **pbr,
+ 		goto err;
+ 	}
+ 
++	/* Prevent underflow when subtracting clu_offset from vol_length */
++	if (le32_to_cpu(bs->bsx.clu_offset) >= le64_to_cpu(bs->bsx.vol_length)) {
++		if (verbose)
++			exfat_err("cluster offset (%u) is larger than volume length (%" PRIu64 ")\n",
++				  le32_to_cpu(bs->bsx.clu_offset),
++				  le64_to_cpu(bs->bsx.vol_length));
++		goto err;
++	}
++
++	/* Cap clu_count to the spec limit to prevent overflow */
++	if (le32_to_cpu(bs->bsx.clu_count) > EXFAT_MAX_NUM_CLUSTER) {
++		if (verbose)
++			exfat_err("too large cluster count: %u, max allowed: %u\n",
++				  le32_to_cpu(bs->bsx.clu_count), EXFAT_MAX_NUM_CLUSTER);
++		goto err;
++	}
++
+ 	clu_max_count = (le64_to_cpu(bs->bsx.vol_length) - le32_to_cpu(bs->bsx.clu_offset)) >>
+ 				bs->bsx.sect_per_clus_bits;
+ 	if (le32_to_cpu(bs->bsx.clu_count) > clu_max_count) {
+diff --git a/include/libexfat.h b/include/libexfat.h
+index bcab23a..1a9a2d5 100644
+--- a/include/libexfat.h
++++ b/include/libexfat.h
+@@ -23,7 +23,7 @@ typedef __u32 clus_t;
+ #define MIN(a, b)	((a) < (b) ? (a) : (b))
+ #define MAX(a, b)	((a) > (b) ? (a) : (b))
+ 
+-#define DIV_ROUND_UP(__i, __d)	(((__i) + (__d) - 1) / (__d))
++#define DIV_ROUND_UP(__i, __d)	(((uint64_t)(__i) + (__d) - 1) / (__d))
+ 
+ #define EXFAT_MIN_NUM_SEC_VOL		(2048)
+ #define EXFAT_MAX_NUM_SEC_VOL		((2 << 64) - 1)
+diff --git a/tests/clu_count_overflow/exfat.img.tar.xz b/tests/clu_count_overflow/exfat.img.tar.xz
+new file mode 100644
+index 0000000000000000000000000000000000000000..bd0f0853a32f476a3afafd483ae5ba5fc5b3b66a
+GIT binary patch
+literal 3636
+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
+
+literal 0
+HcmV?d00001
+
+-- 
+2.55.0
+

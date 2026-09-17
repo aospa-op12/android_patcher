@@ -1,0 +1,52 @@
+From 86cf1088c981ae2e30e518337603463b0c7f343e Mon Sep 17 00:00:00 2001
+From: Nan Wu <wnan@google.com>
+Date: Wed, 1 Apr 2026 10:49:39 -0700
+Subject: [PATCH 05/27] Fix intent redirect bypass via selector in
+ addCreatorToken
+
+  When evaluating whether to append a creator token to an intent in
+  ActivityManagerService.addCreatorToken, the system calculates a
+  targetPackage to determine if isCreatorSameAsTarget is true. If
+  the creator and target match, the token is omitted since the intent
+  is seemingly staying within the same application.
+
+  However, the previous logic failed to inspect the intent's selector.
+  An attacker could bypass the token injection by setting the outer
+  intent's package to their own app (tricking isCreatorSameAsTarget
+  into evaluating as true), while embedding a selector that explicitly
+  targets a victim's component. The Android routing framework
+  (ComputerEngine) evaluates the selector's explicit component and
+  routes the intent to the victim, successfully delivering the payload
+  without a creator token attached.
+
+  This change fixes the targetPackage calculation to correctly account
+  for selectors. It now prioritizes the explicit component of the outer
+  intent, followed by the explicit component or package of the selector,
+  and finally falls back to the outer intent's package constraint.
+
+Bug: 487147249
+Test: Manually verifies the PoC of the vulnerability no longer works
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:dc03f183688231c065ac0e13ef10a00732ba7199
+Merged-In: Idf5bdc7a5f9d1ca64b5504edc776685fd3bd3306
+Change-Id: Idf5bdc7a5f9d1ca64b5504edc776685fd3bd3306
+---
+ .../core/java/com/android/server/am/ActivityManagerService.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/am/ActivityManagerService.java b/services/core/java/com/android/server/am/ActivityManagerService.java
+index 1b01fc1400c2..09af1daf4c06 100644
+--- a/services/core/java/com/android/server/am/ActivityManagerService.java
++++ b/services/core/java/com/android/server/am/ActivityManagerService.java
+@@ -21334,7 +21334,7 @@ public class ActivityManagerService extends IActivityManager.Stub
+ 
+         String targetPackage = intent.getComponent() != null
+                 ? intent.getComponent().getPackageName()
+-                : intent.getPackage();
++                : null;
+         final boolean isCreatorSameAsTarget = creatorPackage != null && creatorPackage.equals(
+                 targetPackage);
+         final boolean noExtraIntentKeys =
+-- 
+2.55.0
+

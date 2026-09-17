@@ -1,0 +1,59 @@
+From d2889deb6ea3487b8a62a84544709811d5816bef Mon Sep 17 00:00:00 2001
+From: Brian Delwiche <delwiche@google.com>
+Date: Thu, 30 Apr 2026 11:07:19 -0700
+Subject: [PATCH 01/10] Unflag remove_bond_caller_info
+
+The logic to remove bond caller information when bonding is concluded is
+now always enabled, as the flag remove_bond_caller_info has been
+removed.
+
+As this has security implications, we are removing this prior to release
+but after pre-Trunkfood QA, to enable backports synchronized with
+release.
+
+Test: mmm packages/modules/Bluetooth
+Bug: 492665910
+Bug: 495543559
+Bug: 488091076
+Flag: EXEMPT FLAG_REMOVAL
+Change-Id: Idcfc017de481004c27b072327879b3fa1c10e93b
+---
+ .../android/bluetooth/btservice/AdapterService.java   |  2 +-
+ flags/pairing.aconfig                                 | 11 -----------
+ 2 files changed, 1 insertion(+), 12 deletions(-)
+
+diff --git a/android/app/src/com/android/bluetooth/btservice/AdapterService.java b/android/app/src/com/android/bluetooth/btservice/AdapterService.java
+index 2ea76965033..69e48200c2c 100644
+--- a/android/app/src/com/android/bluetooth/btservice/AdapterService.java
++++ b/android/app/src/com/android/bluetooth/btservice/AdapterService.java
+@@ -4641,7 +4641,7 @@ public class AdapterService extends Service {
+         mStorage.onBondStateChanged(device, fromState, toState);
+ 
+         // Remove the bond caller info when bonding is concluded
+-        if (Flags.removeBondCallerInfo() && toState != BOND_BONDING) {
++        if (toState != BOND_BONDING) {
+             CallerInfo callerInfo = mBondAttemptCallerInfo.remove(device.getAddress());
+             if (callerInfo != null) {
+                 Log.d(TAG, "Removed bond caller info for device: " + device);
+diff --git a/flags/pairing.aconfig b/flags/pairing.aconfig
+index bbcf9af1bd9..cff3826be74 100644
+--- a/flags/pairing.aconfig
++++ b/flags/pairing.aconfig
+@@ -231,14 +231,3 @@ flag {
+         purpose: PURPOSE_BUGFIX
+     }
+ }
+-
+-
+-flag {
+-    name: "remove_bond_caller_info"
+-    namespace: "bluetooth"
+-    description: "Remove bond caller information when bonding is concluded"
+-    bug: "492665910"
+-    metadata {
+-        purpose: PURPOSE_BUGFIX
+-    }
+-}
+-- 
+2.55.0
+

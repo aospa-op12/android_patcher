@@ -1,0 +1,79 @@
+From 4f68cd365515cd44c36e0573d1f688500daed836 Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Wed, 27 May 2026 01:23:26 +0000
+Subject: [PATCH 4/7] Fix OOB write in rw_mfc_handle_read_op
+
+Buganizer issue b/503557185 reports a heap buffer overflow vulnerability in com.android.nfc during Mifare Classic NDEF reads.
+
+This CL adds a rollback mechanism that snapshots the ndef_length and
+ndef_start_pos before TLV decoding. It validates the new length and
+restores the original values if inflation is detected. Control flow is also updated to prevent further block reads upon failure.
+
+Bug: 503557185
+Bug: 503553866
+Test: manual
+Flag: EXEMPT BUGFIX
+Change-Id: I2e26dfa48e96c5fee4bbff14c0b0b7be81d19213
+Merged-In: I2e26dfa48e96c5fee4bbff14c0b0b7be81d19213
+(cherry picked from commit 50df1ba6f310a3947ff257d5fee24bb2b371af0c)
+---
+ libnfc-nci/src/nfc/tags/rw_mfc.cc | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/libnfc-nci/src/nfc/tags/rw_mfc.cc b/libnfc-nci/src/nfc/tags/rw_mfc.cc
+index 4fe4634..536f5a4 100644
+--- a/libnfc-nci/src/nfc/tags/rw_mfc.cc
++++ b/libnfc-nci/src/nfc/tags/rw_mfc.cc
+@@ -1286,7 +1286,6 @@ static void rw_mfc_handle_read_op(uint8_t* data) {
+   NFC_HDR* mfc_data;
+   uint16_t len;
+   uint16_t offset;
+-  uint16_t saved_length;
+   bool failed = false;
+   bool done = false;
+   tRW_READ_DATA evt_data;
+@@ -1355,30 +1354,31 @@ static void rw_mfc_handle_read_op(uint8_t* data) {
+       /* On the first read, adjust for any partial block offset */
+       offset = 0;
+       len = RW_MFC_1K_BLOCK_SIZE;
+-      saved_length = p_mfc->ndef_length;
+ 
+       if (p_mfc->work_offset == 0) {
+-        if (!rw_nfc_decodeTlv(data)) {
+-          failed = true;
++        uint16_t saved_len = p_mfc->ndef_length;
++        uint8_t saved_pos = p_mfc->ndef_start_pos;
++        if (!rw_nfc_decodeTlv(data) || p_mfc->ndef_length > saved_len) {
+           LOG(VERBOSE) << __func__ << " FAILED finding TLV";
++          if (p_mfc->ndef_length > saved_len) {
++            android_errorWriteLog(0x534e4554, "178725766");
++          }
++          p_mfc->ndef_length = saved_len; /* roll back */
++          p_mfc->ndef_start_pos = saved_pos;
++          failed = true;
+         }
+         /* Ndef message offset update post response TLV decode */
+         offset = p_mfc->ndef_start_pos;
+       }
+ 
+-      if (!failed && saved_length >= p_mfc->ndef_length) {
++      if (!failed) {
+         /* Skip all reserved and lock bytes */
+-        while ((offset < len) && (p_mfc->work_offset < p_mfc->ndef_length))
+-
+-        {
++        while ((offset < len) && (p_mfc->work_offset < p_mfc->ndef_length)) {
+           /* Collect the NDEF Message */
+           p_mfc->p_ndef_buffer[p_mfc->work_offset] = p[offset];
+           p_mfc->work_offset++;
+           offset++;
+         }
+-      } else {
+-        android_errorWriteLog(0x534e4554, "178725766");
+-        failed = true;
+       }
+ 
+       if (p_mfc->work_offset >= p_mfc->ndef_length) {
+-- 
+2.55.0
+

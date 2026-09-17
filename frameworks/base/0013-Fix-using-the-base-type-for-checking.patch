@@ -1,0 +1,59 @@
+From 081bb76f4a47e970a943543759ba2df89e47de73 Mon Sep 17 00:00:00 2001
+From: Candice Lo <chihtinglo@google.com>
+Date: Fri, 24 Apr 2026 07:56:29 +0000
+Subject: [PATCH 13/27] Fix using the base type for checking
+
+When a window is a sub-window, its `mAttr.type` won't be captured by `isSystemAlertWindowType`. Therefore, the window could run into the early return condition and skip the hide/show in `setHiddenWhileSuspended` when its top parent window is a system alert window and the app is suspended, which will lead to security concerns. Therefore, we check the base type of the window instead.
+
+Bug: 493714520
+Test: atest WindowStateTests
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:617b18b15e675266e52fd88b69506ad7d5f86778
+Merged-In: Ia0c154fca56db7c0c89abc2ea09af600d4990323
+Change-Id: Ia0c154fca56db7c0c89abc2ea09af600d4990323
+---
+ .../core/java/com/android/server/wm/WindowState.java |  3 ++-
+ .../src/com/android/server/wm/WindowStateTests.java  | 12 ++++++++++++
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/wm/WindowState.java b/services/core/java/com/android/server/wm/WindowState.java
+index 530d53c9e2aa..dc2f6c9741e4 100644
+--- a/services/core/java/com/android/server/wm/WindowState.java
++++ b/services/core/java/com/android/server/wm/WindowState.java
+@@ -3232,8 +3232,9 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
+     }
+ 
+     void setHiddenWhileSuspended(boolean hide) {
++        final int baseType = getBaseType();
+         if (mOwnerCanAddInternalSystemWindow
+-                || (!isSystemAlertWindowType(mAttrs.type) && mAttrs.type != TYPE_TOAST)) {
++                || (!isSystemAlertWindowType(baseType) && baseType != TYPE_TOAST)) {
+             return;
+         }
+         if (mHiddenWhileSuspended == hide) {
+diff --git a/services/tests/wmtests/src/com/android/server/wm/WindowStateTests.java b/services/tests/wmtests/src/com/android/server/wm/WindowStateTests.java
+index 118729cb0d48..c9819e845bcc 100644
+--- a/services/tests/wmtests/src/com/android/server/wm/WindowStateTests.java
++++ b/services/tests/wmtests/src/com/android/server/wm/WindowStateTests.java
+@@ -259,6 +259,18 @@ public class WindowStateTests extends WindowTestsBase {
+         verify(overlayWindow).show(true /* doAnimation */, true /* requestAnim */);
+     }
+ 
++    @Test
++    public void testSubWindowHiddenWhenSuspended() {
++        final WindowState parent = newWindowBuilder("parent", TYPE_APPLICATION_OVERLAY).build();
++        final WindowState subWindow = spy(
++                newWindowBuilder("subWindow", TYPE_APPLICATION_PANEL).setParent(parent).build());
++
++        subWindow.setHiddenWhileSuspended(true);
++        verify(subWindow).hide(true /* doAnimation */, true /* requestAnim */);
++        subWindow.setHiddenWhileSuspended(false);
++        verify(subWindow).show(true /* doAnimation */, true /* requestAnim */);
++    }
++
+     @Test
+     @EnableFlags(android.security.Flags.FLAG_APP_LOCK_CORE)
+     public void testOverlayWindowHiddenWhenLockedByAppLock() {
+-- 
+2.55.0
+

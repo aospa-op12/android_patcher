@@ -1,0 +1,64 @@
+From f52e2a37580c9d04e676c95eb7c7bdf7c45403fc Mon Sep 17 00:00:00 2001
+From: Darshil Shah <darshilshah@google.com>
+Date: Fri, 29 May 2026 10:33:07 +0000
+Subject: [PATCH 21/27] Validate caller UID in openProxyFileDescriptor
+
+Ensure that the calling UID matches the owner UID of the AppFuse mount
+before opening the file descriptor to prevent unauthorized cross-app access.
+
+Bug: 491748298
+Test: EXEMPT tested manually
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:7231c8493ec30c2fab8d9e6de0fd842ffb5a37c8
+Merged-In: I83e8105de792c1a805cf029e7cbf57a611786995
+Change-Id: I83e8105de792c1a805cf029e7cbf57a611786995
+---
+ .../core/java/com/android/server/StorageManagerService.java | 3 ++-
+ .../core/java/com/android/server/storage/AppFuseBridge.java | 6 ++++--
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/StorageManagerService.java b/services/core/java/com/android/server/StorageManagerService.java
+index afa77ea7940e..1a1f9570cecd 100644
+--- a/services/core/java/com/android/server/StorageManagerService.java
++++ b/services/core/java/com/android/server/StorageManagerService.java
+@@ -3796,6 +3796,7 @@ class StorageManagerService extends IStorageManager.Stub
+     public @Nullable ParcelFileDescriptor openProxyFileDescriptor(
+             int mountId, int fileId, int mode) {
+         Slog.v(TAG, "mountProxyFileDescriptor");
++        final int uid = Binder.getCallingUid();
+ 
+         // We only support a narrow set of incoming mode flags
+         mode &= MODE_READ_WRITE;
+@@ -3806,7 +3807,7 @@ class StorageManagerService extends IStorageManager.Stub
+                     Slog.e(TAG, "FuseBridge has not been created");
+                     return null;
+                 }
+-                return mAppFuseBridge.openFile(mountId, fileId, mode);
++                return mAppFuseBridge.openFile(uid, mountId, fileId, mode);
+             }
+         } catch (FuseUnavailableMountException | InterruptedException error) {
+             Slog.v(TAG, "The mount point has already been invalid", error);
+diff --git a/services/core/java/com/android/server/storage/AppFuseBridge.java b/services/core/java/com/android/server/storage/AppFuseBridge.java
+index 292314840efb..d839b30ddf44 100644
+--- a/services/core/java/com/android/server/storage/AppFuseBridge.java
++++ b/services/core/java/com/android/server/storage/AppFuseBridge.java
+@@ -96,12 +96,14 @@ public class AppFuseBridge implements Runnable {
+         }
+     }
+ 
+-    public ParcelFileDescriptor openFile(int mountId, int fileId, int mode)
++    public ParcelFileDescriptor openFile(int uid, int mountId, int fileId, int mode)
+             throws FuseUnavailableMountException, InterruptedException {
+         final MountScope scope;
+         synchronized (this) {
+             scope = mScopes.get(mountId);
+-            if (scope == null) {
++            // check that the process attempting to open this file is the actual owner
++            // who created the mounted.
++            if (scope == null || scope.uid != uid) {
+                 throw new FuseUnavailableMountException(mountId);
+             }
+         }
+-- 
+2.55.0
+

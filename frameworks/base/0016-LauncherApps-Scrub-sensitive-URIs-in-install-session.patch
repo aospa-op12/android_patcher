@@ -1,0 +1,126 @@
+From f787e328ba0feaf5450ec7eb36a7abce0f0c3c3a Mon Sep 17 00:00:00 2001
+From: Prabal Singh <prabalsingh@google.com>
+Date: Tue, 19 May 2026 17:31:33 +0000
+Subject: [PATCH 16/27] LauncherApps: Scrub sensitive URIs in install sessions
+
+LauncherApps.getAllPackageInstallerSessions() incorrectly exposed potentially sensitive originatingUri and referrerUri from package install sessions to any application with package visibility to the session owner.
+
+Bug: 498588487
+Test: m FrameworksMockingServicesTests
+Flag: EXEMPT BUGFIX
+Change-Id: Ie51d7366edebf3c120e33f1157b70cb510c684cb
+Merged-In: Ie51d7366edebf3c120e33f1157b70cb510c684cb
+(cherry picked from commit bbeee4f37c25a393d9f217cbfdc3c443e9153fa2)
+---
+ .../server/pm/LauncherAppsService.java        |  3 +-
+ .../server/pm/PackageInstallerService.java    | 17 +++++++-
+ .../pm/PackageInstallerServiceTest.java       | 43 +++++++++++++++++++
+ 3 files changed, 60 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/pm/LauncherAppsService.java b/services/core/java/com/android/server/pm/LauncherAppsService.java
+index 1197155e1a04..9980ac7b3d09 100644
+--- a/services/core/java/com/android/server/pm/LauncherAppsService.java
++++ b/services/core/java/com/android/server/pm/LauncherAppsService.java
+@@ -440,7 +440,8 @@ public class LauncherAppsService extends SystemService {
+             final long token = Binder.clearCallingIdentity();
+             try {
+                 for (int userId : userIds) {
+-                    sessionInfos.addAll(getPackageInstallerService().getAllSessions(userId)
++                    sessionInfos.addAll(getPackageInstallerService()
++                            .getAllSessions(userId, callingUid)
+                             .getList());
+                 }
+             } finally {
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerService.java b/services/core/java/com/android/server/pm/PackageInstallerService.java
+index b102c0f71aa5..952cf2762f1e 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerService.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerService.java
+@@ -1514,6 +1514,18 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
+ 
+     @Override
+     public ParceledListSlice<SessionInfo> getAllSessions(int userId) {
++        final int callingUid = Binder.getCallingUid();
++        return getAllSessions(userId, callingUid);
++    }
++
++    /**
++     * Overload of {@link #getAllSessions(int)} that allows passing a specific UID to be used
++     * for {@link SessionInfo} generation and filtering.
++     *
++     * @param userId the user to get sessions for
++     * @param filterCallingUid the UID used for {@link SessionInfo} scrubbing and filtering
++     */
++    ParceledListSlice<SessionInfo> getAllSessions(int userId, int filterCallingUid) {
+         final int callingUid = Binder.getCallingUid();
+         final Computer snapshot = mPm.snapshotComputer();
+         snapshot.enforceCrossUserPermission(callingUid, userId, true, false, "getAllSessions");
+@@ -1524,11 +1536,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
+                 final PackageInstallerSession session = mSessions.valueAt(i);
+                 if (session.userId == userId && !session.hasParentSessionId()
+                         && !(session.isStaged() && session.isDestroyed())) {
+-                    result.add(session.generateInfoForCaller(false /* includeIcon */, callingUid));
++                    result.add(session.generateInfoForCaller(false /* includeIcon */,
++                            filterCallingUid));
+                 }
+             }
+         }
+-        result.removeIf(info -> shouldFilterSession(snapshot, callingUid, info));
++        result.removeIf(info -> shouldFilterSession(snapshot, filterCallingUid, info));
+ 
+         return new ParceledListSlice<>(result);
+     }
+diff --git a/services/tests/mockingservicestests/src/com/android/server/pm/PackageInstallerServiceTest.java b/services/tests/mockingservicestests/src/com/android/server/pm/PackageInstallerServiceTest.java
+index d4d761b13b5a..32ab331269bb 100644
+--- a/services/tests/mockingservicestests/src/com/android/server/pm/PackageInstallerServiceTest.java
++++ b/services/tests/mockingservicestests/src/com/android/server/pm/PackageInstallerServiceTest.java
+@@ -488,4 +488,47 @@ public class PackageInstallerServiceTest {
+         PackageInstallerSession session2 = service.getSession(sessionId2);
+         assertThrows(IllegalStateException.class, () -> session2.transfer("com.app.b"));
+     }
++
++    @Test
++    public void testGetAllSessions_filtersSessionsCorrectly() throws Exception {
++        doReturn(mMockDeveloperVerifierController).when(
++                () -> DeveloperVerifierController.getInstance(any(), any(), eq(null))
++        );
++        when(mMockDeveloperVerifierController.getVerifierPackageName()).thenReturn(null);
++
++        final PackageInstallerService service = new PackageInstallerService(
++                rule.mocks().getContext(), mPms, null, null);
++        service.systemReady();
++
++        int callingUid = Binder.getCallingUid();
++        int otherUid = 10002;
++        String appPackageName = "com.app.b";
++
++        ApplicationInfo appBInfo = new ApplicationInfo();
++        appBInfo.uid = otherUid;
++        appBInfo.packageName = appPackageName;
++        when(mMockSnapshot.getApplicationInfo(eq(appPackageName), anyLong(), anyInt()))
++                .thenReturn(appBInfo);
++        when(mMockSnapshot.checkUidPermission(eq(android.Manifest.permission.INSTALL_PACKAGES),
++                eq(otherUid))).thenReturn(PackageManager.PERMISSION_GRANTED);
++        when(mMockSnapshot.getNameForUid(otherUid)).thenReturn(appPackageName);
++
++        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
++                PackageInstaller.SessionParams.MODE_FULL_INSTALL);
++        params.appPackageName = appPackageName;
++        service.createSessionInternal(params, appPackageName, null, otherUid, TEST_USER_ID);
++
++        // Mock snapshot behavior for callingUid
++        when(mMockSnapshot.canQueryPackage(callingUid, appPackageName)).thenReturn(false);
++
++        ParceledListSlice<PackageInstaller.SessionInfo> sessions = service.getAllSessions(
++                TEST_USER_ID);
++        assertThat(sessions.getList()).isEmpty();
++
++        // Now allow callingUid to query the package
++        when(mMockSnapshot.canQueryPackage(callingUid, appPackageName)).thenReturn(true);
++        sessions = service.getAllSessions(TEST_USER_ID);
++        assertThat(sessions.getList()).hasSize(1);
++        assertThat(sessions.getList().get(0).getAppPackageName()).isEqualTo(appPackageName);
++    }
+ }
+-- 
+2.55.0
+

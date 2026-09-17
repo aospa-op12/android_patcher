@@ -1,0 +1,46 @@
+From bb564105c583a1648379670a73d34548124da77a Mon Sep 17 00:00:00 2001
+From: Evan Severson <evanseverson@google.com>
+Date: Thu, 9 Apr 2026 08:40:44 -0700
+Subject: [PATCH 02/27] Check notification setting for given user
+
+Test: Manual. New Mock test in following CL
+Bug: 466379087
+Flag: EXEMPT CVE_FIX
+
+Change-Id: Iff63d51c5b269649589c45a8aab0bb9f75b7254a
+(cherry picked from commit 2198f8cd4baa3c801ca90f1ee2ee976234166df7)
+---
+ .../com/android/server/clipboard/ClipboardService.java   | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/services/core/java/com/android/server/clipboard/ClipboardService.java b/services/core/java/com/android/server/clipboard/ClipboardService.java
+index 76f32f0b4061..19d6c69ceaa1 100644
+--- a/services/core/java/com/android/server/clipboard/ClipboardService.java
++++ b/services/core/java/com/android/server/clipboard/ClipboardService.java
+@@ -578,8 +578,9 @@ public class ClipboardService extends SystemService {
+             try {
+                 ContentResolver resolver = getContext()
+                         .createContextAsUser(UserHandle.of(userId), 0).getContentResolver();
+-                Settings.Secure.putInt(resolver,
+-                        Settings.Secure.CLIPBOARD_SHOW_ACCESS_NOTIFICATIONS, (enable ? 1 : 0));
++                Settings.Secure.putIntForUser(resolver,
++                        Settings.Secure.CLIPBOARD_SHOW_ACCESS_NOTIFICATIONS, (enable ? 1 : 0),
++                        userId);
+             } finally {
+                 Binder.restoreCallingIdentity(callingId);
+             }
+@@ -1508,9 +1509,9 @@ public class ClipboardService extends SystemService {
+         if (shouldSuppressAccessNotificationForUidLocked(uid)) {
+             return false;
+         }
+-        if (Settings.Secure.getInt(getContext().getContentResolver(),
++        if (Settings.Secure.getIntForUser(getContext().getContentResolver(),
+                 Settings.Secure.CLIPBOARD_SHOW_ACCESS_NOTIFICATIONS,
+-                (mShowAccessNotifications ? 1 : 0)) == 0) {
++                (mShowAccessNotifications ? 1 : 0), userId) == 0) {
+             return false;
+         }
+         // Don't notify if the app accessing the clipboard is the same as the current owner.
+-- 
+2.55.0
+

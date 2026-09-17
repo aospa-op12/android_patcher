@@ -1,0 +1,33 @@
+From f3fbac4c1fefc31b0320517ca1bb5bec979026c8 Mon Sep 17 00:00:00 2001
+From: Alexei Podtelezhnikov <apodtele@gmail.com>
+Date: Fri, 20 Feb 2026 07:55:43 -0500
+Subject: [PATCH 1/2] * src/sfnt/ttcolr.c (tt_face_colr_blend_layer): Use
+ FT_ALLOC_MULT.
+
+Fixes #1389. The overflow is detected in ft_mem_qrealloc.
+
+Bug: 503556301
+Test: TreeHugger
+Flag: EXEMPT CVE_FIX
+Change-Id: I2a11ad1dcce54a554260935926f7d2c946826369
+---
+ src/sfnt/ttcolr.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/sfnt/ttcolr.c b/src/sfnt/ttcolr.c
+index 2bf9a7e95..43fa25d9c 100644
+--- a/src/sfnt/ttcolr.c
++++ b/src/sfnt/ttcolr.c
+@@ -1805,8 +1805,7 @@
+         FT_Byte*  q;
+ 
+ 
+-        size  = rows * pitch;
+-        if ( FT_ALLOC( buf, size ) )
++        if ( FT_ALLOC_MULT( buf, rows, pitch ) )
+           return error;
+ 
+         p = dstSlot->bitmap.buffer;
+-- 
+2.55.0
+

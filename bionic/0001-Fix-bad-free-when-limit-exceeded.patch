@@ -1,0 +1,58 @@
+From e2c1d844f8984b86052107d3ff5a67ae19d8e5b5 Mon Sep 17 00:00:00 2001
+From: Christopher Ferris <cferris@google.com>
+Date: Tue, 25 Aug 2026 18:00:29 -0700
+Subject: [PATCH] Fix bad free when limit exceeded.
+
+If the android limit code is enabled and a realloc would cross the
+limit, the old code would free the original pointer. However, this
+is invalid and the original pointer should not be changed.
+
+No longer free the pointer in this case and add a test for this
+case.
+
+Bug: 501541998
+
+Test: All unit tests pass.
+Test: Verify that reverting back to old behavior, new test fails.
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:d00918bfbbe06d4a0841d52aabe6dea3a2432787
+Merged-In: I52ccd62f4f513aa55989fb7dda816d13e3171120
+Change-Id: I52ccd62f4f513aa55989fb7dda816d13e3171120
+---
+ libc/bionic/malloc_limit.cpp | 3 +--
+ tests/malloc_test.cpp        | 6 ++++--
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/libc/bionic/malloc_limit.cpp b/libc/bionic/malloc_limit.cpp
+index 85ddc7921..ea771b6b2 100644
+--- a/libc/bionic/malloc_limit.cpp
++++ b/libc/bionic/malloc_limit.cpp
+@@ -201,8 +201,7 @@ static void* LimitRealloc(void* old_mem, size_t bytes) {
+   if (bytes > old_usable_size && !CheckLimit(bytes - old_usable_size)) {
+     warning_log("malloc_limit: realloc(%p, %zu) exceeds limit %" PRId64, old_mem, bytes,
+                 gAllocLimit);
+-    // Free the old pointer.
+-    LimitFree(old_mem);
++    // Do not free the old pointer, it's still valid.
+     return nullptr;
+   }
+ 
+diff --git a/tests/malloc_test.cpp b/tests/malloc_test.cpp
+index 46f234205..cb3f387c6 100644
+--- a/tests/malloc_test.cpp
++++ b/tests/malloc_test.cpp
+@@ -818,8 +818,10 @@ TEST(android_mallopt, set_allocation_limit_realloc_increase) {
+   memory = realloc(memory, 80 * 1024 * 1024);
+   ASSERT_TRUE(memory != nullptr);
+   // Now push past limit.
+-  memory = realloc(memory, 130 * 1024 * 1024);
+-  ASSERT_TRUE(memory == nullptr);
++  void* new_memory = realloc(memory, 130 * 1024 * 1024);
++  ASSERT_TRUE(new_memory == nullptr);
++  // The original pointer should still be valid, so free it.
++  free(memory);
+ 
+   VerifyMaxPointers(max_pointers);
+ #else
+-- 
+2.55.0
+

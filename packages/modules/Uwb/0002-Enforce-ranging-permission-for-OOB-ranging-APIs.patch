@@ -1,0 +1,56 @@
+From da4e3fc6f31b9777685e86502d7e2ca34ea584df Mon Sep 17 00:00:00 2001
+From: Shreshta Manu <shreshtabm@google.com>
+Date: Fri, 17 Apr 2026 14:04:32 -0700
+Subject: [PATCH 2/2] Enforce ranging permission for OOB ranging APIs.
+
+Add enforceRangingPermission() checks to oobDataReceived, deviceOobDisconnected, deviceOobReconnected, deviceOobClosed, and registerOobSendDataListener methods in RangingServiceImpl.
+
+Bug:492683684
+Test: compiles
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:1a1f98ef3e8ee5490e3c794aa9d21cddb87886ac
+Merged-In: I9d2f34330258d00b4d19e57f330c58fdde021846
+Change-Id: I9d2f34330258d00b4d19e57f330c58fdde021846
+---
+ .../java/com/android/server/ranging/RangingServiceImpl.java  | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ranging/service/java/com/android/server/ranging/RangingServiceImpl.java b/ranging/service/java/com/android/server/ranging/RangingServiceImpl.java
+index dcae54b..35e9460 100644
+--- a/ranging/service/java/com/android/server/ranging/RangingServiceImpl.java
++++ b/ranging/service/java/com/android/server/ranging/RangingServiceImpl.java
+@@ -113,26 +113,31 @@ public class RangingServiceImpl extends IRangingAdapter.Stub {
+ 
+     @Override
+     public void oobDataReceived(OobHandle oobHandle, byte[] data) {
++        enforceRangingPermission();
+         mRangingInjector.getRangingServiceManager().oobDataReceived(oobHandle, data);
+     }
+ 
+     @Override
+     public void deviceOobDisconnected(OobHandle oobHandle) {
++        enforceRangingPermission();
+         mRangingInjector.getRangingServiceManager().deviceOobDisconnected(oobHandle);
+     }
+ 
+     @Override
+     public void deviceOobReconnected(OobHandle oobHandle) {
++        enforceRangingPermission();
+         mRangingInjector.getRangingServiceManager().deviceOobReconnected(oobHandle);
+     }
+ 
+     @Override
+     public void deviceOobClosed(OobHandle oobHandle) {
++        enforceRangingPermission();
+         mRangingInjector.getRangingServiceManager().deviceOobClosed(oobHandle);
+     }
+ 
+     @Override
+     public void registerOobSendDataListener(IOobSendDataListener oobSendDataListener) {
++        enforceRangingPermission();
+         mRangingInjector.getRangingServiceManager().registerOobSendDataListener(
+                 oobSendDataListener);
+     }
+-- 
+2.55.0
+

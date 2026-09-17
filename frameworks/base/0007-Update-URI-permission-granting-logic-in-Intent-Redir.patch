@@ -1,0 +1,107 @@
+From 7847e9763d3635cd018c75f46798cf416a999bf0 Mon Sep 17 00:00:00 2001
+From: Yang Kudurshian <scarlety@google.com>
+Date: Tue, 24 Mar 2026 09:54:43 -0700
+Subject: [PATCH 07/27] Update URI permission granting logic in Intent
+ Redirection Hardening
+
+Updating the Intent URI Grant Permission logic to require explicit authorization from both callingUid and the intentCreatorUid.
+Only if both parties are successfully authorized does the system proceed to use the caller's intent grants to access the requested URI. This maintains compatibility with the pre-hardening workflow as well.
+
+For more detailed, please refer go/intent-redirection-2.
+
+Bug: 477024345
+Test: Manually test exploit app won't work
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:73db64658dd35ab3ef781fc73983f1ee694111f0
+Merged-In: Ica84e8733595bd2dced557bade0811feacbded19
+Change-Id: Ica84e8733595bd2dced557bade0811feacbded19
+---
+ .../android/server/uri/NeededUriGrants.java    | 14 --------------
+ .../server/wm/ActivityStartController.java     |  9 +++++----
+ .../com/android/server/wm/ActivityStarter.java | 18 ++++++++++--------
+ 3 files changed, 15 insertions(+), 26 deletions(-)
+
+diff --git a/services/core/java/com/android/server/uri/NeededUriGrants.java b/services/core/java/com/android/server/uri/NeededUriGrants.java
+index 2fe61e00c97e..cb6623aa2f63 100644
+--- a/services/core/java/com/android/server/uri/NeededUriGrants.java
++++ b/services/core/java/com/android/server/uri/NeededUriGrants.java
+@@ -38,20 +38,6 @@ public class NeededUriGrants {
+         this.uris = new ArraySet<>();
+     }
+ 
+-    public void merge(NeededUriGrants other) {
+-        if (other == null) return;
+-        if (!Objects.equals(this.targetPkg, other.targetPkg)
+-                || this.targetUid != other.targetUid || this.flags != other.flags) {
+-            Slog.wtf("NeededUriGrants",
+-                    "The other NeededUriGrants does not share the same targetUid, targetPkg or "
+-                            + "flags. It cannot be merged into this NeededUriGrants. This "
+-                            + "NeededUriGrants: " + this.toStringWithoutUri()
+-                            + ". Other NeededUriGrants: " + other.toStringWithoutUri());
+-        } else {
+-            this.uris.addAll(other.uris);
+-        }
+-    }
+-
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+         long token = proto.start(fieldId);
+         proto.write(NeededUriGrantsProto.TARGET_PACKAGE, targetPkg);
+diff --git a/services/core/java/com/android/server/wm/ActivityStartController.java b/services/core/java/com/android/server/wm/ActivityStartController.java
+index cc4525683838..a5453c2ce8ff 100644
+--- a/services/core/java/com/android/server/wm/ActivityStartController.java
++++ b/services/core/java/com/android/server/wm/ActivityStartController.java
+@@ -495,10 +495,11 @@ public class ActivityStartController {
+                                     .checkGrantUriPermissionFromIntent(intent, creatorUid,
+                                             aInfo.applicationInfo.packageName,
+                                             UserHandle.getUserId(aInfo.getUid()));
+-                            if (intentGrants == null) {
+-                                intentGrants = creatorIntentGrants;
+-                            } else {
+-                                intentGrants.merge(creatorIntentGrants);
++                            // Only both calling UID and creator UID has permission to grant uri,
++                            // then we grant uri permission to intentGrants. Otherwise, we clear
++                            // intentGrants.
++                            if (intentGrants == null || creatorIntentGrants == null) {
++                                intentGrants = null;
+                             }
+                         } catch (SecurityException securityException) {
+                             ActivityStarter.logAndThrowExceptionForIntentRedirect(mService.mContext,
+diff --git a/services/core/java/com/android/server/wm/ActivityStarter.java b/services/core/java/com/android/server/wm/ActivityStarter.java
+index f085ef1c0b0e..ece2b982dea7 100644
+--- a/services/core/java/com/android/server/wm/ActivityStarter.java
++++ b/services/core/java/com/android/server/wm/ActivityStarter.java
+@@ -696,10 +696,11 @@ class ActivityStarter {
+                                             UserHandle.getUserId(activityInfo.getUid()),
+                                             activityInfo.requireContentUriPermissionFromCaller,
+                                             /* requestHashCode */ this.hashCode());
+-                            if (intentGrants == null) {
+-                                intentGrants = creatorIntentGrants;
+-                            } else {
+-                                intentGrants.merge(creatorIntentGrants);
++                            // Only both calling UID and creator UID has permission to grant uri,
++                            // then we grant uri permission to intentGrants. Otherwise, we clear
++                            // intentGrants.
++                            if (intentGrants == null || creatorIntentGrants == null) {
++                                intentGrants = null;
+                             }
+                         } catch (SecurityException securityException) {
+                             logAndThrowExceptionForIntentRedirect(supervisor.mService.mContext,
+@@ -720,10 +721,11 @@ class ActivityStarter {
+                                             activityInfo.applicationInfo.packageName,
+                                             UserHandle.getUserId(
+                                                     activityInfo.getUid()));
+-                            if (intentGrants == null) {
+-                                intentGrants = creatorIntentGrants;
+-                            } else {
+-                                intentGrants.merge(creatorIntentGrants);
++                            // Only both calling UID and creator UID has permission to grant uri,
++                            // then we grant uri permission to intentGrants. Otherwise, we clear
++                            // intentGrants.
++                            if (intentGrants == null || creatorIntentGrants == null) {
++                                intentGrants = null;
+                             }
+                         } catch (SecurityException securityException) {
+                             logAndThrowExceptionForIntentRedirect(supervisor.mService.mContext,
+-- 
+2.55.0
+

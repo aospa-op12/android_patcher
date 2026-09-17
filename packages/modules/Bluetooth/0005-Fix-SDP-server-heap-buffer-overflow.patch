@@ -1,0 +1,373 @@
+From 8da8954c78e71e7c7891dfc2db52c39a55d870ba Mon Sep 17 00:00:00 2001
+From: Brian Delwiche <delwiche@google.com>
+Date: Thu, 18 Jun 2026 20:43:20 -0700
+Subject: [PATCH 05/10] Fix SDP server heap buffer overflow
+
+This change addresses a heap buffer overflow vulnerability in the SDP
+server where an oversized attribute could be serialized into a fixed
+400-byte allocation during partial attribute responses.
+
+To prevent out-of-bounds writes and subsequent out-of-bounds reads, this
+commit enforces strict bounds checks against SDP_MAX_ATTR_LEN across
+three areas:
+1. Sizing the allocation dynamically in
+sdpu_build_partial_attrib_entry
+   and validating attribute bounds before serialization.
+2. Adding explicit length checks to L2CAP continuation request branches
+   in process_service_attr_req and process_service_search_attr_req.
+3. Enforcing maximum attribute length limits during database insertion
+   in sdp_add_attribute_to_record.
+
+Also corrects a couple of mistaken bounds checks elsewhere in
+sdp_server.cc.
+
+Bug: 503554490
+Test: atest net_test_stack_sdp
+Flag: EXEMPT CVE_FIX
+Change-Id: I3005192b7deb0ce2e259c9abac0077c00a9ebac0
+---
+ system/stack/sdp/sdp_db.cc                    |  11 +-
+ system/stack/sdp/sdp_server.cc                |  12 ++
+ system/stack/sdp/sdp_utils.cc                 |  20 +-
+ system/stack/test/sdp/stack_sdp_test.cc       | 173 ++++++++++++++++++
+ system/stack/test/sdp/stack_sdp_utils_test.cc |  29 +++
+ 5 files changed, 239 insertions(+), 6 deletions(-)
+
+diff --git a/system/stack/sdp/sdp_db.cc b/system/stack/sdp/sdp_db.cc
+index 411a62f73df..a060eeec723 100644
+--- a/system/stack/sdp/sdp_db.cc
++++ b/system/stack/sdp/sdp_db.cc
+@@ -29,6 +29,7 @@
+ #include <com_android_bluetooth_flags.h>
+ #include <string.h>
+ 
++#include <algorithm>
+ #include <cstdint>
+ 
+ #include "internal_include/bt_target.h"
+@@ -534,7 +535,7 @@ static bool sdp_add_attribute_to_record(tSDP_RECORD* p_rec, uint16_t attr_id, ui
+   p_attr->type = attr_type;
+   p_attr->len = attr_len;
+ 
+-  if (p_rec->free_pad_ptr + attr_len >= SDP_MAX_PAD_LEN) {
++  if (attr_len > SDP_MAX_ATTR_LEN || p_rec->free_pad_ptr + attr_len >= SDP_MAX_PAD_LEN) {
+     if (p_rec->free_pad_ptr >= SDP_MAX_PAD_LEN) {
+       log::error(
+               "sdp_add_attribute_to_record failed: free pad {} equals or exceeds max "
+@@ -543,13 +544,15 @@ static bool sdp_add_attribute_to_record(tSDP_RECORD* p_rec, uint16_t attr_id, ui
+       return false;
+     }
+ 
++    uint32_t max_allowed_len =
++            std::min<uint32_t>(SDP_MAX_ATTR_LEN, SDP_MAX_PAD_LEN - p_rec->free_pad_ptr);
+     /* do truncate only for text string type descriptor */
+     if (attr_type == TEXT_STR_DESC_TYPE) {
+       log::warn("sdp_add_attribute_to_record: attr_len:{} too long. truncate to ({})", attr_len,
+-                SDP_MAX_PAD_LEN - p_rec->free_pad_ptr);
++                max_allowed_len);
+ 
+-      attr_len = SDP_MAX_PAD_LEN - p_rec->free_pad_ptr;
+-      p_val[SDP_MAX_PAD_LEN - p_rec->free_pad_ptr - 1] = '\0';
++      attr_len = max_allowed_len;
++      p_val[max_allowed_len - 1] = '\0';
+     } else {
+       attr_len = 0;
+     }
+diff --git a/system/stack/sdp/sdp_server.cc b/system/stack/sdp/sdp_server.cc
+index c023d65dce7..992b9cbcbb4 100644
+--- a/system/stack/sdp/sdp_server.cc
++++ b/system/stack/sdp/sdp_server.cc
+@@ -802,6 +802,12 @@ static void process_service_attr_req(tCONN_CB* p_ccb, uint16_t trans_num, uint16
+     p_attr = sdp_db_find_attr_in_rec(p_rec, attr_seq.attr_entry[xx].start,
+                                      attr_seq.attr_entry[xx].end);
+     if (p_attr) {
++      if (p_attr->len > SDP_MAX_ATTR_LEN) {
++        log::error("SDP attr too big: SDP_MAX_ATTR_LEN={}, val_len={}",
++                   SDP_MAX_ATTR_LEN, p_attr->len);
++        sdpu_build_n_send_error(p_ccb, trans_num, tSDP_STATUS::SDP_NO_RESOURCES, NULL);
++        return;
++      }
+       if (is_service_avrc_target) {
+         sdpu_set_avrc_target_version(p_attr, p_ccb->device_address);
+         if (p_attr->id == ATTR_ID_SUPPORTED_FEATURES) {
+@@ -1198,6 +1204,12 @@ static void process_service_search_attr_req(tCONN_CB* p_ccb, uint16_t trans_num,
+                                        attr_seq.attr_entry[xx].end);
+ 
+       if (p_attr) {
++        if (p_attr->len > SDP_MAX_ATTR_LEN) {
++          log::error("SDP attr too big: SDP_MAX_ATTR_LEN={}, val_len={}",
++                     SDP_MAX_ATTR_LEN, p_attr->len);
++          sdpu_build_n_send_error(p_ccb, trans_num, tSDP_STATUS::SDP_NO_RESOURCES, NULL);
++          return;
++        }
+         if (is_service_avrc_target) {
+           sdpu_set_avrc_target_version(p_attr, p_ccb->device_address);
+           if (p_attr->id == ATTR_ID_SUPPORTED_FEATURES && p_attr_profile_desc_list_id != nullptr) {
+diff --git a/system/stack/sdp/sdp_utils.cc b/system/stack/sdp/sdp_utils.cc
+index 7110b6d053a..32de0cffe75 100644
+--- a/system/stack/sdp/sdp_utils.cc
++++ b/system/stack/sdp/sdp_utils.cc
+@@ -1439,10 +1439,26 @@ uint16_t sdpu_get_attrib_entry_len(const tSDP_ATTRIBUTE* p_attr) {
+  ******************************************************************************/
+ uint8_t* sdpu_build_partial_attrib_entry(uint8_t* p_out, const tSDP_ATTRIBUTE* p_attr, uint16_t len,
+                                          uint16_t* offset) {
+-  uint8_t* p_attr_buff = reinterpret_cast<uint8_t*>(osi_malloc(sizeof(uint8_t) * SDP_MAX_ATTR_LEN));
+-  sdpu_build_attrib_entry(p_attr_buff, p_attr);
+ 
+   uint16_t attr_len = sdpu_get_attrib_entry_len(p_attr);
++  if (p_attr->len > SDP_MAX_ATTR_LEN) {
++    log::error("attr payload len {} exceeds SDP_MAX_ATTR_LEN", p_attr->len);
++    return p_out;
++  }
++
++  uint8_t* p_attr_buff = reinterpret_cast<uint8_t*>(osi_malloc(attr_len));
++  if (p_attr_buff == nullptr) {
++    log::error("Failed to allocate buffer for attribute entry");
++    return p_out;
++  }
++
++  sdpu_build_attrib_entry(p_attr_buff, p_attr);
++
++  if (*offset >= attr_len) {
++    log::warn("offset({}) >= len({})", *offset, attr_len);
++    osi_free(p_attr_buff);
++    return p_out;
++  }
+ 
+   if (len > SDP_MAX_ATTR_LEN) {
+     log::error("len {} exceeds SDP_MAX_ATTR_LEN", len);
+diff --git a/system/stack/test/sdp/stack_sdp_test.cc b/system/stack/test/sdp/stack_sdp_test.cc
+index d2b854282d3..79e047f345f 100644
+--- a/system/stack/test/sdp/stack_sdp_test.cc
++++ b/system/stack/test/sdp/stack_sdp_test.cc
+@@ -17,6 +17,7 @@
+ #include <gmock/gmock.h>
+ #include <gtest/gtest.h>
+ #include <stdlib.h>
++#include <vector>
+ 
+ #include <cstddef>
+ #include <cstdint>
+@@ -26,6 +27,7 @@
+ #include "include/macros.h"
+ #include "osi/include/allocator.h"
+ #include "stack/include/bt_uuid16.h"
++#include "stack/include/bt_types.h"
+ #include "stack/include/sdp_api.h"
+ #include "stack/include/sdpdefs.h"
+ #include "stack/mock/mock_stack_l2cap_interface.h"
+@@ -514,3 +516,174 @@ TEST_F(StackSdpInitTest, sdp_cancel_pending_conn) {
+   ASSERT_EQ(p_ccb1->con_state, tSDP_STATE::IDLE);
+   ASSERT_EQ(p_ccb2->con_state, tSDP_STATE::IDLE);
+ }
++
++TEST_F(StackSdpInitTest, write_read_max_attr_len_slicing) {
++  uint32_t handle = SDP_CreateRecord();
++  ASSERT_NE(handle, 0u);
++
++  // Write max size attribute payload into DB
++  std::vector<uint8_t> val(SDP_MAX_ATTR_LEN, 'A');
++  ASSERT_TRUE(SDP_AddAttribute(handle, 0x1234, TEXT_STR_DESC_TYPE, val.size(), val.data()));
++
++  // Prepare Server CCB
++  tCONN_CB* p_ccb = sdpu_allocate_ccb();
++  ASSERT_NE(p_ccb, nullptr);
++  p_ccb->con_state = tSDP_STATE::CONNECTED;
++  p_ccb->connection_id = L2CA_ConnectReqWithSecurity_cid;
++  p_ccb->rem_mtu_size = 512;
++
++  std::vector<uint8_t> accumulated_attr_list;
++  bool hit_continuation = false;
++  uint16_t cont_offset = 0;
++
++  for (int i = 0; i < 50; ++i) { // max 50 chunks safety limit
++    // Allocate request msg buffer
++    BT_HDR* p_req_msg = (BT_HDR*)osi_malloc(SDP_DATA_BUF_SIZE);
++    p_req_msg->offset = L2CAP_MIN_OFFSET;
++    uint8_t* p_req = (uint8_t*)(p_req_msg + 1) + L2CAP_MIN_OFFSET;
++
++    // Build SDP request header
++    UINT8_TO_BE_STREAM(p_req, SDP_PDU_SERVICE_ATTR_REQ);
++    UINT16_TO_BE_STREAM(p_req, 1); // trans_num = 1
++
++    // Skip param_len for now
++    uint8_t* p_param_len = p_req;
++    p_req += 2;
++
++    uint8_t* p_param_start = p_req;
++
++    UINT32_TO_BE_STREAM(p_req, handle);
++    UINT16_TO_BE_STREAM(p_req, 50); // max_list_len = 50 to force slicing
++
++    // Attribute ID list containing 0x1234
++    UINT8_TO_BE_STREAM(p_req, 0x35); // DATA_ELE_SEQ_DESC_TYPE, next byte len
++    UINT8_TO_BE_STREAM(p_req, 0x03); // sequence length
++    UINT8_TO_BE_STREAM(p_req, 0x09); // UINT, 2 bytes
++    UINT16_TO_BE_STREAM(p_req, 0x1234); // attribute ID
++
++    // Continuation state
++    if (hit_continuation) {
++      UINT8_TO_BE_STREAM(p_req, 2);
++      UINT16_TO_BE_STREAM(p_req, cont_offset);
++    } else {
++      UINT8_TO_BE_STREAM(p_req, 0);
++    }
++
++    uint16_t param_len = p_req - p_param_start;
++    p_req = p_param_len;
++    UINT16_TO_BE_STREAM(p_req, param_len);
++
++    p_req_msg->len = (p_param_start - (uint8_t*)p_req_msg) + param_len -
++                     sizeof(BT_HDR) - L2CAP_MIN_OFFSET;
++
++    BT_HDR* p_rsp_msg = nullptr;
++    EXPECT_CALL(mock_stack_l2cap_interface_, L2CA_DataWrite(_, _))
++            .WillOnce(Invoke([&p_rsp_msg](uint16_t /* cid */, BT_HDR* p_data) -> tL2CAP_DW_RESULT {
++              p_rsp_msg = p_data;
++              return tL2CAP_DW_RESULT::SUCCESS;
++            }));
++
++    sdp_server_handle_client_req(p_ccb, p_req_msg);
++    osi_free(p_req_msg);
++
++    ASSERT_NE(p_rsp_msg, nullptr);
++    uint8_t* p_rsp = (uint8_t*)(p_rsp_msg + 1) + p_rsp_msg->offset;
++    uint8_t pdu_id;
++    BE_STREAM_TO_UINT8(pdu_id, p_rsp);
++
++    ASSERT_EQ(pdu_id, SDP_PDU_SERVICE_ATTR_RSP);
++
++    uint16_t rsp_trans_num, rsp_param_len;
++    BE_STREAM_TO_UINT16(rsp_trans_num, p_rsp);
++    BE_STREAM_TO_UINT16(rsp_param_len, p_rsp);
++
++    uint16_t attr_list_bytes;
++    BE_STREAM_TO_UINT16(attr_list_bytes, p_rsp);
++
++    accumulated_attr_list.insert(accumulated_attr_list.end(), p_rsp, p_rsp + attr_list_bytes);
++    p_rsp += attr_list_bytes;
++
++    uint8_t rsp_cont_len;
++    BE_STREAM_TO_UINT8(rsp_cont_len, p_rsp);
++    if (rsp_cont_len == 2) {
++      hit_continuation = true;
++      BE_STREAM_TO_UINT16(cont_offset, p_rsp);
++    } else {
++      hit_continuation = false;
++    }
++
++    osi_free(p_rsp_msg);
++
++    if (!hit_continuation) {
++      break;
++    }
++  }
++
++  ASSERT_FALSE(hit_continuation);
++
++  // Verification
++  ASSERT_GE(accumulated_attr_list.size(), 3u + 3u + 400u);
++
++  uint8_t* p_acc = accumulated_attr_list.data();
++  uint8_t seq_descr;
++  BE_STREAM_TO_UINT8(seq_descr, p_acc);
++  // 0x36: DATA_ELE_SEQ_DESC_TYPE | SIZE_IN_NEXT_WORD ((6 << 3) | 6)
++  ASSERT_EQ(seq_descr, 0x36);
++  uint16_t seq_len;
++  BE_STREAM_TO_UINT16(seq_len, p_acc);
++  // Total sequence nested length: 3 (Attr ID element) + 3 (string val header) +
++  // 400 (payload) = 406
++  ASSERT_EQ(seq_len, 406);
++
++  uint8_t id_descr;
++  BE_STREAM_TO_UINT8(id_descr, p_acc);
++  // 0x09: UINT_DESC_TYPE | SIZE_TWO_BYTES ((1 << 3) | 1)
++  ASSERT_EQ(id_descr, 0x09);
++  uint16_t returned_id;
++  BE_STREAM_TO_UINT16(returned_id, p_acc);
++  // Check the element returned has attribute ID 0x1234
++  ASSERT_EQ(returned_id, 0x1234);
++
++  uint8_t val_descr;
++  BE_STREAM_TO_UINT8(val_descr, p_acc);
++  // 0x26: TEXT_STR_DESC_TYPE | SIZE_IN_NEXT_WORD ((4 << 3) | 6)
++  ASSERT_EQ(val_descr, 0x26);
++  uint16_t val_len;
++  BE_STREAM_TO_UINT16(val_len, p_acc);
++  // 400 bytes matching stored SDP_MAX_ATTR_LEN (and not truncated to < 400)
++  ASSERT_EQ(val_len, 400);
++
++  // Validate the payload bytes match our expected write data
++  for (int i = 0; i < 400; ++i) {
++    ASSERT_EQ(p_acc[i], 'A');
++  }
++
++  sdpu_release_ccb(*p_ccb);
++  SDP_DeleteRecord(handle);
++}
++
++TEST_F(StackSdpInitTest, SDP_AddAttribute__exceed_max_attr_len_truncation) {
++  uint32_t record_handle = SDP_CreateRecord();
++  ASSERT_NE((uint32_t)0, record_handle);
++
++  // Create a buffer larger than SDP_MAX_ATTR_LEN
++  uint32_t attr_len = SDP_MAX_ATTR_LEN + 10;
++  std::vector<uint8_t> attr_val(attr_len, 'a');
++  attr_val[attr_len - 1] = '\0';
++
++  ASSERT_TRUE(SDP_AddAttribute(
++          record_handle, ATTR_ID_SERVICE_NAME, TEXT_STR_DESC_TYPE, attr_len, attr_val.data()));
++
++  tSDP_RECORD* record = sdp_db_find_record(record_handle);
++  ASSERT_TRUE(record != nullptr);
++
++  const tSDP_ATTRIBUTE* attribute =
++          sdp_db_find_attr_in_rec(record, ATTR_ID_SERVICE_NAME, ATTR_ID_SERVICE_NAME);
++  ASSERT_TRUE(attribute != nullptr);
++
++  // Ensure that the attribute length was truncated to SDP_MAX_ATTR_LEN
++  ASSERT_EQ((uint32_t)SDP_MAX_ATTR_LEN, attribute->len);
++  ASSERT_EQ(sizeof(uint32_t) + SDP_MAX_ATTR_LEN, record->free_pad_ptr);
++
++  ASSERT_TRUE(SDP_DeleteRecord(record_handle));
++}
+diff --git a/system/stack/test/sdp/stack_sdp_utils_test.cc b/system/stack/test/sdp/stack_sdp_utils_test.cc
+index 3b25a1b0f9e..18e29fd9636 100644
+--- a/system/stack/test/sdp/stack_sdp_utils_test.cc
++++ b/system/stack/test/sdp/stack_sdp_utils_test.cc
+@@ -641,3 +641,32 @@ TEST_F(StackSdpUtilsTest, sdpu_compare_uuid_with_attr_u128) {
+ 
+   free(p_attr);
+ }
++
++TEST_F(StackSdpUtilsTest, sdpu_build_partial_attrib_entry_exceeds_max_attr_len) {
++  uint8_t dummy_value[500] = {0};
++  tSDP_ATTRIBUTE attr = {
++          .len = 500,
++          .value_ptr = dummy_value,
++          .id = 1,
++          .type = TEXT_STR_DESC_TYPE,
++  };
++  uint8_t out_buf[100] = {0};
++  uint16_t offset = 0;
++  uint8_t* p_ret = sdpu_build_partial_attrib_entry(out_buf, &attr, 50, &offset);
++  ASSERT_EQ(p_ret, out_buf);
++}
++
++TEST_F(StackSdpUtilsTest, sdpu_build_partial_attrib_entry_within_bounds) {
++  uint8_t dummy_value[10] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa};
++  tSDP_ATTRIBUTE attr = {
++          .len = 10,
++          .value_ptr = dummy_value,
++          .id = 1,
++          .type = TEXT_STR_DESC_TYPE,
++  };
++  uint8_t out_buf[100] = {0};
++  uint16_t offset = 0;
++  uint8_t* p_ret = sdpu_build_partial_attrib_entry(out_buf, &attr, 5, &offset);
++  ASSERT_EQ(p_ret, out_buf + 5);
++  ASSERT_EQ(offset, 5);
++}
+-- 
+2.55.0
+

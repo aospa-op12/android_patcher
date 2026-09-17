@@ -1,0 +1,50 @@
+From 174e4555ef15db0c6effcb82a30d1f559f3073c7 Mon Sep 17 00:00:00 2001
+From: Shubang Lu <shubang@google.com>
+Date: Tue, 31 Mar 2026 14:58:21 -0700
+Subject: [PATCH 2/3] Specify intent package for "Send Feedback"
+
+To avoid opening malicious apps
+
+Bug: 388272624
+Test: mmm
+Flag: EXEMPT BUGFIX
+Change-Id: Ib2f9c4d4b806825213c4bb9a80fc49fce91f27fc
+(cherry picked from commit 22867ae71e25bb43cfd2d3640a6abf7ee206cc7f)
+---
+ src/com/android/tv/ui/sidepanel/SettingsFragment.java | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/com/android/tv/ui/sidepanel/SettingsFragment.java b/src/com/android/tv/ui/sidepanel/SettingsFragment.java
+index 762a190..1ac5d81 100644
+--- a/src/com/android/tv/ui/sidepanel/SettingsFragment.java
++++ b/src/com/android/tv/ui/sidepanel/SettingsFragment.java
+@@ -17,6 +17,7 @@
+ package com.android.tv.ui.sidepanel;
+ 
+ import android.app.ApplicationErrorReport;
++import android.content.ComponentName;
+ import android.content.Intent;
+ import android.media.tv.TvInputInfo;
+ import android.view.View;
+@@ -39,6 +40,8 @@ import java.util.List;
+ /** Shows TV app settings. */
+ public class SettingsFragment extends SideFragment {
+     private static final String TRACKER_LABEL = "settings";
++    private static final String FEEDBACK_PACKAGE = "com.google.android.feedback";
++    private static final String FEEDBACK_CLASS = "com.google.android.feedback.FeedbackActivity";
+ 
+     @Override
+     protected String getTitle() {
+@@ -171,7 +174,8 @@ public class SettingsFragment extends SideFragment {
+                 new ActionItem(getString(R.string.settings_send_feedback)) {
+                     @Override
+                     protected void onSelected() {
+-                        Intent intent = new Intent(Intent.ACTION_APP_ERROR);
++                        Intent intent = new Intent().setComponent(
++                                new ComponentName(FEEDBACK_PACKAGE, FEEDBACK_CLASS));
+                         ApplicationErrorReport report = new ApplicationErrorReport();
+                         report.packageName = report.processName = getContext().getPackageName();
+                         report.time = System.currentTimeMillis();
+-- 
+2.55.0
+

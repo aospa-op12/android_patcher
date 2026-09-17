@@ -1,0 +1,166 @@
+From 2388c6e733ba038583c67d03b8a123505a56e19e Mon Sep 17 00:00:00 2001
+From: Jeremy Meyer <jakmcbane@google.com>
+Date: Thu, 21 May 2026 15:46:02 -0700
+Subject: [PATCH 24/27] ResStringPool: Validate styleCount and offsets
+
+ResStringPool::setTo fails to validate that the style-index array fits
+within the data chunk when stringCount is zero, as it was skipping
+validation of stringsStart. An attacker could craft a ResStringPool
+with a large styleCount and a huge stringsStart, bypassing current
+checks and leading to an OOB heap read in ResStringPool::styleAt.
+
+This change:
+1. Validates stringsStart and stylesStart against the total size early.
+2. Improves the styleCount bounds check to ensure the style offset array
+   fits within the chunk and doesn't overlap with string data.
+
+Bug: 499091487
+Test: atest libandroidfw_tests --host
+Flag: EXEMPT BUGFIX
+
+Change-Id: I3e1e4579fbda8ee89c5fea3945d523c6e5b72dc9
+(cherry picked from commit 968cb0736ca65b22a3c7230820912adffa452b1e)
+---
+ libs/androidfw/ResourceTypes.cpp            | 47 ++++++++++++-------
+ libs/androidfw/tests/ResourceTypes_test.cpp | 51 +++++++++++++++++++++
+ 2 files changed, 81 insertions(+), 17 deletions(-)
+
+diff --git a/libs/androidfw/ResourceTypes.cpp b/libs/androidfw/ResourceTypes.cpp
+index 91c863f4ee7a..133f92e061c2 100644
+--- a/libs/androidfw/ResourceTypes.cpp
++++ b/libs/androidfw/ResourceTypes.cpp
+@@ -563,6 +563,18 @@ status_t ResStringPool::setTo(incfs::map_ptr<void> data, size_t size, bool copyD
+         return (mError=BAD_TYPE);
+     }
+     mSize = mHeader->header.size;
++
++    if (mHeader->stringsStart > mSize) {
++        ALOGW("Bad string block: string pool starts at %u, after total size %u\n",
++                (unsigned int)mHeader->stringsStart, (unsigned int)mSize);
++        return (mError=BAD_TYPE);
++    }
++    if (mHeader->stylesStart > mSize) {
++        ALOGW("Bad string block: style pool starts at %u, after total size %u\n",
++                (unsigned int)mHeader->stylesStart, (unsigned int)mSize);
++        return (mError=BAD_TYPE);
++    }
++
+     mEntries = data.offset(mHeader->header.headerSize).convert<uint32_t>();
+ 
+     if (mHeader->stringCount > 0) {
+@@ -657,12 +669,26 @@ status_t ResStringPool::setTo(incfs::map_ptr<void> data, size_t size, bool copyD
+             return (mError=BAD_TYPE);
+         }
+ 
+-        if ((mEntryStyles.convert<uint8_t>() - mHeader.convert<uint8_t>()) > (int)size) {
+-            ALOGW("Bad string block: entry of %d styles extends past data size %d\n",
+-                    (int)(mEntryStyles.convert<uint8_t>()-mHeader.convert<uint8_t>()),
+-                    (int)size);
++        const size_t styleOffsetsStart =
++            mEntryStyles.convert<uint8_t>() - mHeader.convert<uint8_t>();
++        // Check for integer overflow before calculating styleOffsetsSize.
++        if (mHeader->styleCount > SIZE_MAX / sizeof(uint32_t)) {
++            ALOGW("Bad string block: integer overflow calculating style offsets size\n");
++            return (mError = BAD_TYPE);
++        }
++        const size_t styleOffsetsSize = mHeader->styleCount * sizeof(uint32_t);
++        if (styleOffsetsSize > size || styleOffsetsStart > (size - styleOffsetsSize)) {
++            ALOGW("Bad string block: entry of %d styles extends past data size %zu\n",
++                    (int)mHeader->styleCount, size);
+             return (mError=BAD_TYPE);
+         }
++
++        if (styleOffsetsStart > mHeader->stringsStart ||
++            styleOffsetsSize > (mHeader->stringsStart - styleOffsetsStart)) {
++          ALOGW("Bad string block: style offsets extend past style data start\n");
++          return (mError = BAD_TYPE);
++        }
++
+         mStyles = data.offset(mHeader->stylesStart).convert<uint32_t>();
+         if (mHeader->stylesStart >= mHeader->header.size) {
+             ALOGW("Bad string block: style pool starts %d, after total size %d\n",
+@@ -670,19 +696,6 @@ status_t ResStringPool::setTo(incfs::map_ptr<void> data, size_t size, bool copyD
+             return (mError=BAD_TYPE);
+         }
+ 
+-        if (mHeader->styleCount >
+-            std::numeric_limits<decltype(mHeader->styleCount)>::max() / sizeof(uint32_t)) {
+-          ALOGW("Bad string block: potential integer overflow when finding style entries\n");
+-          return (mError = BAD_TYPE);
+-        }
+-
+-        const size_t styleOffsetsStart =
+-            mEntryStyles.convert<uint8_t>() - mHeader.convert<uint8_t>();
+-        if (mHeader->styleCount * sizeof(uint32_t) > (mHeader->stringsStart - styleOffsetsStart)) {
+-          ALOGW("Bad string block: style offsets extend past style data start\n");
+-          return (mError = BAD_TYPE);
+-        }
+-
+         mStylePoolSize =
+             (mHeader->header.size-mHeader->stylesStart)/sizeof(uint32_t);
+ 
+diff --git a/libs/androidfw/tests/ResourceTypes_test.cpp b/libs/androidfw/tests/ResourceTypes_test.cpp
+index 8ef1d0be0a3f..0fe6b225e4f3 100644
+--- a/libs/androidfw/tests/ResourceTypes_test.cpp
++++ b/libs/androidfw/tests/ResourceTypes_test.cpp
+@@ -73,6 +73,57 @@ TEST(ResourceTypesTest, ResStringPool_HeaderStyleCountExceedsStyleOffsetCount) {
+   ASSERT_THAT(modified.setTo(test.data(), test.bytes()), Eq(BAD_TYPE));
+ }
+ 
++TEST(ResourceTypesTest, ResStringPool_StyleCountUnboundedWhenStringCountIsZero) {
++  const ResStringPool_span endSpan = {
++      { htodl(ResStringPool_span::END) },
++      htodl(ResStringPool_span::END), htodl(ResStringPool_span::END)
++  };
++
++  struct MockResStringPool {
++    ResStringPool_header header;
++    uint32_t styleOffset;
++    ResStringPool_span terminator;
++  };
++
++  MockResStringPool mock;
++  memset(&mock, 0, sizeof(mock));
++
++  mock.header.header.type = util::HostToDevice16(RES_STRING_POOL_TYPE);
++  mock.header.header.headerSize = util::HostToDevice16(sizeof(ResStringPool_header));
++  mock.header.header.size = util::HostToDevice32(sizeof(mock));
++  mock.header.stringCount = util::HostToDevice32(0);
++  mock.header.styleCount = util::HostToDevice32(100);
++  mock.header.stringsStart = util::HostToDevice32(0xFFFFFFFF);
++  mock.header.stylesStart = util::HostToDevice32(offsetof(MockResStringPool, terminator));
++  mock.terminator = endSpan;
++
++  ResStringPool test;
++  ASSERT_THAT(test.setTo(&mock, sizeof(mock)), Eq(BAD_TYPE));
++}
++
++TEST(ResourceTypesTest, ResStringPool_StyleCountCalculationOverflow) {
++  using namespace android;
++
++  struct MockResStringPool {
++    ResStringPool_header header;
++    uint32_t styleOffset;
++  };
++
++  MockResStringPool mock;
++  memset(&mock, 0, sizeof(mock));
++
++  mock.header.header.type = util::HostToDevice16(RES_STRING_POOL_TYPE);
++  mock.header.header.headerSize = util::HostToDevice16(sizeof(ResStringPool_header));
++  mock.header.header.size = util::HostToDevice32(sizeof(mock));
++  mock.header.stringCount = util::HostToDevice32(0);
++  mock.header.styleCount = util::HostToDevice32(0x40000000u);
++  mock.header.stringsStart = util::HostToDevice32(sizeof(ResStringPool_header));
++  mock.header.stylesStart = util::HostToDevice32(sizeof(ResStringPool_header));
++
++  ResStringPool test;
++  ASSERT_THAT(test.setTo(&mock, sizeof(mock)), Eq(BAD_TYPE));
++}
++
+ TEST(ResourceTypesTest, ResXMLTree_ValidateNode_SmallAttributeSize) {
+   struct MockResXMLTree {
+     ResXMLTree_header header;
+-- 
+2.55.0
+

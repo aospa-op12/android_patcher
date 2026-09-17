@@ -1,0 +1,365 @@
+From 082977a63ca1d83b7a1596ae5fe55a845a83b1cc Mon Sep 17 00:00:00 2001
+From: Nathan Muggli <nmuggli@google.com>
+Date: Thu, 11 Jun 2026 18:00:47 -0600
+Subject: [PATCH] Fix integer overflow and heap OOB write errors
+
+Replaced stack-allocated Variable Length Arrays (VLAs) with dynamic
+heap allocations in write_flate to eliminate stack overflow vectors.
+Added robust integer overflow checks using unsigned long long when
+calculating expanded pixel sizes (header.cupsBytesPerLine * 6) and
+reject sizes exceeding INT_MAX early with Z_MEM_ERROR.
+
+Bug: 511640905
+Test: Ensure printing still works
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:6a68ec5827c47b489ad6c0d618539a03b6c4a030
+Merged-In: I934add5868d832899dfebed68a1eff00f535e62d
+Change-Id: I934add5868d832899dfebed68a1eff00f535e62d
+---
+ ...r-overflow-and-heap-OOB-write-errors.patch | 176 ++++++++++++++++++
+ ppd/raster-interpret.c                        |  18 +-
+ ppd/rastertops.c                              |  68 ++++---
+ 3 files changed, 239 insertions(+), 23 deletions(-)
+ create mode 100644 patches/libppd-2.1.1-Fix-integer-overflow-and-heap-OOB-write-errors.patch
+
+diff --git a/patches/libppd-2.1.1-Fix-integer-overflow-and-heap-OOB-write-errors.patch b/patches/libppd-2.1.1-Fix-integer-overflow-and-heap-OOB-write-errors.patch
+new file mode 100644
+index 0000000..f4ea86d
+--- /dev/null
++++ b/patches/libppd-2.1.1-Fix-integer-overflow-and-heap-OOB-write-errors.patch
+@@ -0,0 +1,176 @@
++From aa51ecd74ae9f43c0569e87e88a39b374e6574c7 Mon Sep 17 00:00:00 2001
++From: Nathan Muggli <nmuggli@google.com>
++Date: Thu, 11 Jun 2026 18:16:29 -0600
++Subject: [PATCH] Fix integer overflow and heap OOB write errors
++
++Replaced stack-allocated Variable Length Arrays (VLAs) with dynamic
++heap allocations in write_flate to eliminate stack overflow vectors.
++Added robust integer overflow checks using unsigned long long when
++calculating expanded pixel sizes (header.cupsBytesPerLine * 6) and
++reject sizes exceeding INT_MAX early with Z_MEM_ERROR.
++
++Change-Id: I15962b17cc1c0c5bda2acb6187deb2fcf4479967
++---
++ ppd/raster-interpret.c | 18 +++++++++--
++ ppd/rastertops.c       | 68 +++++++++++++++++++++++++++++-------------
++ 2 files changed, 63 insertions(+), 23 deletions(-)
++
++diff --git a/ppd/raster-interpret.c b/ppd/raster-interpret.c
++index ad0b456b..83f34309 100644
++--- a/ppd/raster-interpret.c
+++++ b/ppd/raster-interpret.c
++@@ -17,6 +17,7 @@
++ #include <ppd/debug-internal.h>
++ #include <ppd/libcups2-private.h>
++ #include <math.h>
+++#include <stdint.h>
++ 
++ 
++ //
++@@ -490,10 +491,23 @@ ppdRasterInterpretPPD(
++ 	break;
++   }
++ 
++-  h->cupsBytesPerLine = (h->cupsBitsPerPixel * h->cupsWidth + 7) / 8;
+++  uint64_t bpl = ((uint64_t)h->cupsBitsPerPixel * h->cupsWidth + 7) / 8;
+++  if (bpl > UINT32_MAX)
+++  {
+++    _ppdRasterAddError("Invalid raster dimensions (overflow).\n");
+++    return (-1);
+++  }
+++  h->cupsBytesPerLine = (unsigned int)bpl;
++ 
++   if (h->cupsColorOrder == CUPS_ORDER_BANDED)
++-    h->cupsBytesPerLine *= h->cupsNumColors;
+++  {
+++    uint64_t bpl = (uint64_t)h->cupsBytesPerLine * h->cupsNumColors;
+++    if (bpl > UINT32_MAX) {
+++      _ppdRasterAddError("Invalid raster dimensions/color (overflow).\n");
+++      return (-1);
+++    }
+++    h->cupsBytesPerLine = (unsigned int)bpl;
+++  }
++ 
++   return (status);
++ }
++diff --git a/ppd/rastertops.c b/ppd/rastertops.c
++index dc8bac7d..8ab1916a 100644
++--- a/ppd/rastertops.c
+++++ b/ppd/rastertops.c
++@@ -245,18 +245,42 @@ write_flate(cups_raster_t *ras,	        // I - Image data
++ 						   // output buffer
++   z_stream       strm;                             // Structure required
++ 						   // by deflate
++-  unsigned char  *pixdata,
++-                 *convertedpix;
++-  unsigned char  in[header.cupsBytesPerLine * 6],  // Input data buffer
++-                 out[header.cupsBytesPerLine * 6]; // Output data buffer
++-		
+++  unsigned char  *pixdata = NULL,
+++                 *convertedpix = NULL,
+++                 *in = NULL,                       // Input data buffer
+++                 *out = NULL;                      // Output data buffer
+++  uint64_t expanded_size = (uint64_t)header.cupsBytesPerLine * 6;
+++  int            deflate_initialized = 0;
+++
+++  if (expanded_size > INT32_MAX)
+++  {
+++    if (doc->logfunc) doc->logfunc(doc->logdata, CF_LOGLEVEL_ERROR,
+++				  "ppdFilterRasterToPS: cupsBytesPerLine too large for pixel expansion (overflow)");
+++    return (Z_MEM_ERROR);
+++  }
+++
+++  in = malloc((size_t)expanded_size);
+++  out = malloc((size_t)expanded_size);
+++  pixdata = malloc(header.cupsBytesPerLine);
+++  // Use the max size possibly needed for the loop below.
+++  convertedpix = malloc((size_t)expanded_size);
+++
+++  if (!in || !out || !pixdata || !convertedpix)
+++  {
+++    if (doc->logfunc) doc->logfunc(doc->logdata, CF_LOGLEVEL_ERROR,
+++				  "ppdFilterRasterToPS: memory allocation failed");
+++    ret = Z_MEM_ERROR;
+++    goto cleanup;
+++  }
+++
++   // allocate deflate state
++   strm.zalloc = Z_NULL;
++   strm.zfree = Z_NULL;
++   strm.opaque = Z_NULL;
++   ret = deflateInit(&strm, -1);
++   if (ret != Z_OK)
++-    return (ret);
+++    goto cleanup;
+++  deflate_initialized = 1;
++ 
++   if (header.cupsBitsPerColor == 1 &&
++       (header.cupsColorSpace == CUPS_CSPACE_RGB ||
++@@ -267,17 +291,14 @@ write_flate(cups_raster_t *ras,	        // I - Image data
++   // compress until end of file
++   do
++   {
++-    pixdata = malloc(header.cupsBytesPerLine);
++     cupsRasterReadPixels(ras, pixdata, header.cupsBytesPerLine);
++     if (flag)
++     {
++-      convertedpix = malloc(header.cupsBytesPerLine * 6);
++       convert_pixels(pixdata,convertedpix, header.cupsBytesPerLine);
++-      alloc = header.cupsBytesPerLine * 6;
+++      alloc = (int)expanded_size;
++     }
++     else
++     {
++-      convertedpix = malloc(header.cupsBytesPerLine);
++       memcpy(convertedpix, pixdata, header.cupsBytesPerLine);
++       alloc = header.cupsBytesPerLine;
++     }
++@@ -306,29 +327,34 @@ write_flate(cups_raster_t *ras,	        // I - Image data
++       have = alloc - strm.avail_out;
++       if (fwrite(out, 1, have, doc->outputfp) != have)
++       {
++-	(void)deflateEnd(&strm);
++-	if (convertedpix != NULL)
++-	  free(convertedpix);
++-	return (Z_ERRNO);
+++	ret = Z_ERRNO;
+++	goto cleanup;
++       }
++     }
++     while (strm.avail_out == 0);
++ 
++     // all input will be used
++     DEBUG_assert(strm.avail_in == 0);
++-
++-    // done when last data in file processed
++-    free(pixdata);
++-    free(convertedpix);
++   }
++   while (flush != Z_FINISH);
++ 
++   // stream will be complete
++   DEBUG_assert(ret == Z_STREAM_END);
+++  ret = Z_OK;
+++
+++cleanup:
+++  if (deflate_initialized)
+++    (void)deflateEnd(&strm);
+++  if (in != NULL)
+++    free(in);
+++  if (out != NULL)
+++    free(out);
+++  if (pixdata != NULL)
+++    free(pixdata);
+++  if (convertedpix != NULL)
+++    free(convertedpix);
++ 
++-  // clean up and return
++-  (void)deflateEnd(&strm);
++-  return (Z_OK);
+++  return (ret);
++ }
++ 
++ //
++-- 
++2.54.0.1136.gdb2ca164c4-goog
++
+diff --git a/ppd/raster-interpret.c b/ppd/raster-interpret.c
+index ad0b456..83f3430 100644
+--- a/ppd/raster-interpret.c
++++ b/ppd/raster-interpret.c
+@@ -17,6 +17,7 @@
+ #include <ppd/debug-internal.h>
+ #include <ppd/libcups2-private.h>
+ #include <math.h>
++#include <stdint.h>
+ 
+ 
+ //
+@@ -490,10 +491,23 @@ ppdRasterInterpretPPD(
+ 	break;
+   }
+ 
+-  h->cupsBytesPerLine = (h->cupsBitsPerPixel * h->cupsWidth + 7) / 8;
++  uint64_t bpl = ((uint64_t)h->cupsBitsPerPixel * h->cupsWidth + 7) / 8;
++  if (bpl > UINT32_MAX)
++  {
++    _ppdRasterAddError("Invalid raster dimensions (overflow).\n");
++    return (-1);
++  }
++  h->cupsBytesPerLine = (unsigned int)bpl;
+ 
+   if (h->cupsColorOrder == CUPS_ORDER_BANDED)
+-    h->cupsBytesPerLine *= h->cupsNumColors;
++  {
++    uint64_t bpl = (uint64_t)h->cupsBytesPerLine * h->cupsNumColors;
++    if (bpl > UINT32_MAX) {
++      _ppdRasterAddError("Invalid raster dimensions/color (overflow).\n");
++      return (-1);
++    }
++    h->cupsBytesPerLine = (unsigned int)bpl;
++  }
+ 
+   return (status);
+ }
+diff --git a/ppd/rastertops.c b/ppd/rastertops.c
+index dc8bac7..8ab1916 100644
+--- a/ppd/rastertops.c
++++ b/ppd/rastertops.c
+@@ -245,18 +245,42 @@ write_flate(cups_raster_t *ras,	        // I - Image data
+ 						   // output buffer
+   z_stream       strm;                             // Structure required
+ 						   // by deflate
+-  unsigned char  *pixdata,
+-                 *convertedpix;
+-  unsigned char  in[header.cupsBytesPerLine * 6],  // Input data buffer
+-                 out[header.cupsBytesPerLine * 6]; // Output data buffer
+-		
++  unsigned char  *pixdata = NULL,
++                 *convertedpix = NULL,
++                 *in = NULL,                       // Input data buffer
++                 *out = NULL;                      // Output data buffer
++  uint64_t expanded_size = (uint64_t)header.cupsBytesPerLine * 6;
++  int            deflate_initialized = 0;
++
++  if (expanded_size > INT32_MAX)
++  {
++    if (doc->logfunc) doc->logfunc(doc->logdata, CF_LOGLEVEL_ERROR,
++				  "ppdFilterRasterToPS: cupsBytesPerLine too large for pixel expansion (overflow)");
++    return (Z_MEM_ERROR);
++  }
++
++  in = malloc((size_t)expanded_size);
++  out = malloc((size_t)expanded_size);
++  pixdata = malloc(header.cupsBytesPerLine);
++  // Use the max size possibly needed for the loop below.
++  convertedpix = malloc((size_t)expanded_size);
++
++  if (!in || !out || !pixdata || !convertedpix)
++  {
++    if (doc->logfunc) doc->logfunc(doc->logdata, CF_LOGLEVEL_ERROR,
++				  "ppdFilterRasterToPS: memory allocation failed");
++    ret = Z_MEM_ERROR;
++    goto cleanup;
++  }
++
+   // allocate deflate state
+   strm.zalloc = Z_NULL;
+   strm.zfree = Z_NULL;
+   strm.opaque = Z_NULL;
+   ret = deflateInit(&strm, -1);
+   if (ret != Z_OK)
+-    return (ret);
++    goto cleanup;
++  deflate_initialized = 1;
+ 
+   if (header.cupsBitsPerColor == 1 &&
+       (header.cupsColorSpace == CUPS_CSPACE_RGB ||
+@@ -267,17 +291,14 @@ write_flate(cups_raster_t *ras,	        // I - Image data
+   // compress until end of file
+   do
+   {
+-    pixdata = malloc(header.cupsBytesPerLine);
+     cupsRasterReadPixels(ras, pixdata, header.cupsBytesPerLine);
+     if (flag)
+     {
+-      convertedpix = malloc(header.cupsBytesPerLine * 6);
+       convert_pixels(pixdata,convertedpix, header.cupsBytesPerLine);
+-      alloc = header.cupsBytesPerLine * 6;
++      alloc = (int)expanded_size;
+     }
+     else
+     {
+-      convertedpix = malloc(header.cupsBytesPerLine);
+       memcpy(convertedpix, pixdata, header.cupsBytesPerLine);
+       alloc = header.cupsBytesPerLine;
+     }
+@@ -306,29 +327,34 @@ write_flate(cups_raster_t *ras,	        // I - Image data
+       have = alloc - strm.avail_out;
+       if (fwrite(out, 1, have, doc->outputfp) != have)
+       {
+-	(void)deflateEnd(&strm);
+-	if (convertedpix != NULL)
+-	  free(convertedpix);
+-	return (Z_ERRNO);
++	ret = Z_ERRNO;
++	goto cleanup;
+       }
+     }
+     while (strm.avail_out == 0);
+ 
+     // all input will be used
+     DEBUG_assert(strm.avail_in == 0);
+-
+-    // done when last data in file processed
+-    free(pixdata);
+-    free(convertedpix);
+   }
+   while (flush != Z_FINISH);
+ 
+   // stream will be complete
+   DEBUG_assert(ret == Z_STREAM_END);
++  ret = Z_OK;
++
++cleanup:
++  if (deflate_initialized)
++    (void)deflateEnd(&strm);
++  if (in != NULL)
++    free(in);
++  if (out != NULL)
++    free(out);
++  if (pixdata != NULL)
++    free(pixdata);
++  if (convertedpix != NULL)
++    free(convertedpix);
+ 
+-  // clean up and return
+-  (void)deflateEnd(&strm);
+-  return (Z_OK);
++  return (ret);
+ }
+ 
+ //
+-- 
+2.55.0
+

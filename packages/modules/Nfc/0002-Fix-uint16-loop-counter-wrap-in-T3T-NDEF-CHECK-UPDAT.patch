@@ -1,0 +1,54 @@
+From d7741c6957ed15068ec2e05b832b26725d92b572 Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Mon, 11 May 2026 10:22:27 +0000
+Subject: [PATCH 2/7] Fix uint16 loop counter wrap in T3T NDEF CHECK/UPDATE
+
+Add check in rw_t3t_send_next_ndef_update_cmd
+and rw_t3t_send_next_ndef_check_cmd to prevent integer wrap and
+subsequent unbounded heap out-of-bounds write.
+
+Bug: 508389055
+Test: Manual
+Flag: EXEMPT BUGFIX
+Change-Id: I9af7532c6f5283fbba2f213278590fe238e30d07
+Merged-In: I9af7532c6f5283fbba2f213278590fe238e30d07
+(cherry picked from commit a3c9d2138b59dca19d2c34b9ec956d8e8fe18dc4)
+---
+ libnfc-nci/src/nfc/tags/rw_t3t.cc | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/libnfc-nci/src/nfc/tags/rw_t3t.cc b/libnfc-nci/src/nfc/tags/rw_t3t.cc
+index 2f55465..5a16703 100644
+--- a/libnfc-nci/src/nfc/tags/rw_t3t.cc
++++ b/libnfc-nci/src/nfc/tags/rw_t3t.cc
+@@ -847,6 +847,13 @@ tNFC_STATUS rw_t3t_send_next_ndef_update_cmd(tRW_T3T_CB* p_cb) {
+         ndef_blocks_to_write); /* Number of blocks to write in this command */
+     timeout = rw_t3t_update_timeout(ndef_blocks_to_write);
+ 
++    if (ndef_blocks_to_write > UINT16_MAX - first_block_to_write) {
++        LOG(ERROR) << StringPrintf("%s: Heap out-of-bounds",
++                               __func__);
++        android_errorWriteLog(0x534e4554, "508389055");
++        return NFC_STATUS_FAILED;
++    }
++
+     for (block_id = first_block_to_write;
+          block_id < (first_block_to_write + ndef_blocks_to_write); block_id++) {
+       if (block_id < 256) {
+@@ -989,6 +996,13 @@ tNFC_STATUS rw_t3t_send_next_ndef_check_cmd(tRW_T3T_CB* p_cb) {
+     UINT8_TO_STREAM(
+         p, cur_blocks_to_read); /* Number of blocks to check in this command */
+ 
++    if (cur_blocks_to_read > UINT16_MAX - first_block_to_read) {
++        LOG(ERROR) << StringPrintf("%s: Heap out-of-bounds",
++                               __func__);
++        android_errorWriteLog(0x534e4554, "508389055");
++        return NFC_STATUS_FAILED;
++    }
++
+     for (block_id = first_block_to_read;
+          block_id < (first_block_to_read + cur_blocks_to_read); block_id++) {
+       if (block_id < 256) {
+-- 
+2.55.0
+

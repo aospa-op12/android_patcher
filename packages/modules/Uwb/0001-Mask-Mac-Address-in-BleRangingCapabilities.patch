@@ -1,0 +1,194 @@
+From 575299c7d72cea35ce3ec52edafcee524a3d2e68 Mon Sep 17 00:00:00 2001
+From: Wilson Chen <wilsonwh@google.com>
+Date: Tue, 21 Apr 2026 05:13:13 +0000
+Subject: [PATCH 1/2] Mask Mac Address in BleRangingCapabilities
+
+For security reasons, in BleCsRangingCapabilities and
+BleRssiRangingCapabilities:
+- Use a fake Mac address of 00:00:00:00:00:00 when transacting
+  through binders. Preventing mac address leak to user apps.
+- Get and set for bluetooth address stay normal within
+  uwb service for internal use.
+
+#b/494698714
+Bug: 494698714
+Test: atest RangingFrameworkTests,
+            RangingServiceTests,
+            CtsRangingTestCases,
+            CtsMultiDeviceGenericRangingTests
+Flag: EXEMPT BUGFIX
+Change-Id: I9160b5d9745670f3c8d084f89ca2d7e7c67bf0b4
+(cherry picked from commit c8aed37c3cd8efdae7d2f52f27b5a99919d86cbc)
+---
+ .../ble/cs/BleCsRangingCapabilities.java      | 10 ++++-
+ .../ble/rssi/BleRssiRangingCapabilities.java  | 18 ++++++--
+ .../android/ranging/RangingFrameworkTest.java | 43 +++++++++++++++++++
+ 3 files changed, 65 insertions(+), 6 deletions(-)
+
+diff --git a/ranging/framework/java/android/ranging/ble/cs/BleCsRangingCapabilities.java b/ranging/framework/java/android/ranging/ble/cs/BleCsRangingCapabilities.java
+index 63209b9..e916431 100644
+--- a/ranging/framework/java/android/ranging/ble/cs/BleCsRangingCapabilities.java
++++ b/ranging/framework/java/android/ranging/ble/cs/BleCsRangingCapabilities.java
+@@ -66,6 +66,8 @@ public final class BleCsRangingCapabilities implements Parcelable, TechnologyCap
+      */
+     public static final int CS_SECURITY_LEVEL_FOUR = 4;
+ 
++    private static final String DEFAULT_MAC_ADDRESS = "00:00:00:00:00:00";
++
+     private final List<Integer> mSupportedSecurityLevels;
+     private final String mBluetoothAddress;
+ 
+@@ -86,10 +88,14 @@ public final class BleCsRangingCapabilities implements Parcelable, TechnologyCap
+         mBluetoothAddress = builder.mBluetoothAddress;
+     }
+ 
++    /**
++     * For security reasons, use a fake mac address to prevent the actual device mac address from
++     * being leaked to user apps.
++     */
+     private BleCsRangingCapabilities(Parcel in) {
+         mSupportedSecurityLevels = new ArrayList<>();
+         in.readList(mSupportedSecurityLevels, Integer.class.getClassLoader(), Integer.class);
+-        mBluetoothAddress = in.readString();
++        mBluetoothAddress = DEFAULT_MAC_ADDRESS;
+     }
+ 
+     @NonNull
+@@ -134,10 +140,10 @@ public final class BleCsRangingCapabilities implements Parcelable, TechnologyCap
+         return 0;
+     }
+ 
++    /** For security reasons, do not write actual mac address to the parcel */
+     @Override
+     public void writeToParcel(@NonNull Parcel dest, int flags) {
+         dest.writeList(mSupportedSecurityLevels);
+-        dest.writeString(mBluetoothAddress);
+     }
+ 
+     /**
+diff --git a/ranging/framework/java/android/ranging/ble/rssi/BleRssiRangingCapabilities.java b/ranging/framework/java/android/ranging/ble/rssi/BleRssiRangingCapabilities.java
+index 1306980..a2b8014 100644
+--- a/ranging/framework/java/android/ranging/ble/rssi/BleRssiRangingCapabilities.java
++++ b/ranging/framework/java/android/ranging/ble/rssi/BleRssiRangingCapabilities.java
+@@ -31,14 +31,20 @@ import androidx.annotation.NonNull;
+  * @hide
+  */
+ public class BleRssiRangingCapabilities implements Parcelable, TechnologyCapabilities {
++    private static final String DEFAULT_MAC_ADDRESS = "00:00:00:00:00:00";
++
+     private final String mBluetoothAddress;
+ 
+     public BleRssiRangingCapabilities(String address) {
+         mBluetoothAddress = address;
+     }
+ 
++    /**
++     * For security reasons, use a fake mac address to prevent the actual device mac address from
++     * being leaked to user apps.
++     */
+     protected BleRssiRangingCapabilities(Parcel in) {
+-        mBluetoothAddress = in.readString();
++        mBluetoothAddress = DEFAULT_MAC_ADDRESS;
+     }
+ 
+     public static final Creator<BleRssiRangingCapabilities> CREATOR = new Creator<>() {
+@@ -53,6 +59,11 @@ public class BleRssiRangingCapabilities implements Parcelable, TechnologyCapabil
+         }
+     };
+ 
++    /**
++     * Get the device's bluetooth address. Internal usage only. Clients of the ranging API should
++     * use {@link BluetoothAdapter#getAddress()} instead.
++     */
++    @NonNull
+     public String getBluetoothAddress() {
+         return mBluetoothAddress;
+     }
+@@ -67,10 +78,9 @@ public class BleRssiRangingCapabilities implements Parcelable, TechnologyCapabil
+         return 0;
+     }
+ 
++    /** For security reasons, do not write actual mac address to the parcel */
+     @Override
+-    public void writeToParcel(@NonNull Parcel dest, int flags) {
+-        dest.writeString(mBluetoothAddress);
+-    }
++    public void writeToParcel(@NonNull Parcel dest, int flags) {}
+ 
+     @Override public String toString() {
+         return "BleRssiCapabilities{" +
+diff --git a/ranging/framework/tests/src/android/ranging/RangingFrameworkTest.java b/ranging/framework/tests/src/android/ranging/RangingFrameworkTest.java
+index 3ef8eeb..fcc847b 100644
+--- a/ranging/framework/tests/src/android/ranging/RangingFrameworkTest.java
++++ b/ranging/framework/tests/src/android/ranging/RangingFrameworkTest.java
+@@ -45,10 +45,12 @@ import static org.mockito.Mockito.when;
+ 
+ import android.content.AttributionSource;
+ import android.content.Context;
++import android.os.Parcel;
+ import android.os.Process;
+ import android.os.RemoteException;
+ import android.ranging.ble.cs.BleCsRangingCapabilities;
+ import android.ranging.ble.cs.BleCsRangingParams;
++import android.ranging.ble.rssi.BleRssiRangingCapabilities;
+ import android.ranging.ble.rssi.BleRssiRangingParams;
+ import android.ranging.oob.DeviceHandle;
+ import android.ranging.oob.OobInitiatorRangingConfig;
+@@ -87,6 +89,7 @@ public class RangingFrameworkTest {
+     private Context mMockContext;
+     private static final int UID = Process.myUid();
+     private static final String PACKAGE_NAME = "com.uwb.test";
++    private static final String FAKE_MAC_ADDRESS = "00:00:00:00:00:00";
+     private static final AttributionSource ATTRIBUTION_SOURCE =
+             new AttributionSource.Builder(UID).setPackageName(PACKAGE_NAME).build();
+     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+@@ -462,6 +465,46 @@ public class RangingFrameworkTest {
+ 
+     }
+ 
++    @Test
++    public void testBleCsRangingCapabilitiesParcel() {
++        String realAddress = "11:22:33:44:55:66";
++        BleCsRangingCapabilities csCapabilities =
++                new BleCsRangingCapabilities.Builder()
++                        .setSupportedSecurityLevels(new java.util.ArrayList<>())
++                        .setBluetoothAddress(realAddress)
++                        .build();
++        // Service side: should have the real address
++        assertEquals(realAddress, csCapabilities.getBluetoothAddress());
++
++        Parcel parcel = Parcel.obtain();
++        csCapabilities.writeToParcel(parcel, 0);
++        parcel.setDataPosition(0);
++
++        BleCsRangingCapabilities fromParcel =
++                BleCsRangingCapabilities.CREATOR.createFromParcel(parcel);
++        // App side: should have the fake address
++        assertEquals(FAKE_MAC_ADDRESS, fromParcel.getBluetoothAddress());
++        parcel.recycle();
++    }
++
++    @Test
++    public void testBleRssiRangingCapabilitiesParcel() {
++        String realAddress = "11:22:33:44:55:66";
++        BleRssiRangingCapabilities rssiCapabilities = new BleRssiRangingCapabilities(realAddress);
++        // Service side: should have the real address
++        assertEquals(realAddress, rssiCapabilities.getBluetoothAddress());
++
++        Parcel parcel = Parcel.obtain();
++        rssiCapabilities.writeToParcel(parcel, 0);
++        parcel.setDataPosition(0);
++
++        BleRssiRangingCapabilities fromParcel =
++                BleRssiRangingCapabilities.CREATOR.createFromParcel(parcel);
++        // App side: should have the fake address
++        assertEquals(FAKE_MAC_ADDRESS, fromParcel.getBluetoothAddress());
++        parcel.recycle();
++    }
++
+     private static Executor getExecutor() {
+         return Runnable::run;
+     }
+-- 
+2.55.0
+
