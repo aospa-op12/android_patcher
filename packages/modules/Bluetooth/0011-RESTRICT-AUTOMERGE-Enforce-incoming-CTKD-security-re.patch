@@ -1,4 +1,4 @@
-From 97b9e065749848a7ff97ff4ce01f8e9086623520 Mon Sep 17 00:00:00 2001
+From 5c0700b31d42643881172dfddba37f2f2b35e20b Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 16 Jun 2026 11:07:21 -0700
 Subject: [PATCH 11/12] [RESTRICT AUTOMERGE] Enforce incoming CTKD security

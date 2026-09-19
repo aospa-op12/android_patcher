@@ -1,4 +1,4 @@
-From 83d7d4cc93a9b76651f5877b4908fe750e246357 Mon Sep 17 00:00:00 2001
+From 9a11c901a7c3ab666892edeea2a0906fe7d3d541 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jakub=20Paw=C5=82owski?= <jpawlowski@google.com>
 Date: Fri, 19 Jun 2026 10:38:34 +0000
 Subject: [PATCH 12/12] GATT: Fix notifications sent to remote device without
@@ -20,18 +20,17 @@ Merged-In: I2f4c477fa482fc255a3612d5864324942580aa5d
 Change-Id: I2f4c477fa482fc255a3612d5864324942580aa5d
 ---
  system/btif/src/btif_gatt_server.cc      |   4 +
- system/stack/gatt/gatt_api.cc            | 114 ++++++++++++++++++++++-
- system/stack/gatt/gatt_auth.cc           |  31 ++++++
- system/stack/gatt/gatt_db.cc             |  58 ++++++++++++
- system/stack/gatt/gatt_int.h             |  13 ++-
+ system/stack/gatt/gatt_api.cc            | 156 ++++++++++++++++-------
+ system/stack/gatt/gatt_auth.cc           |  31 +++++
+ system/stack/gatt/gatt_db.cc             |  58 +++++++++
+ system/stack/gatt/gatt_int.h             |  13 +-
  system/stack/gatt/gatt_main.cc           |   4 +-
- system/stack/gatt/gatt_sr.cc             |  55 +++++++++--
- system/stack/gatt/gatt_utils.cc          |  38 ++++----
- system/stack/include/gatt_api.h          |   3 +
- system/stack/mock/mock_stack_gatt_api.cc |   7 ++
- system/stack/mock/mock_stack_gatt_api.h  |  13 +++
+ system/stack/gatt/gatt_sr.cc             |  55 +++++++-
+ system/stack/gatt/gatt_utils.cc          |  38 +++---
+ system/stack/mock/mock_stack_gatt_api.cc |   7 +
+ system/stack/mock/mock_stack_gatt_api.h  |  13 ++
  system/stack/test/gatt/gatt_sr_test.cc   |   7 +-
- 12 files changed, 309 insertions(+), 38 deletions(-)
+ 11 files changed, 307 insertions(+), 79 deletions(-)
 
 diff --git a/system/btif/src/btif_gatt_server.cc b/system/btif/src/btif_gatt_server.cc
 index 0568ef452a1..88c07c89e81 100644
@@ -49,7 +48,7 @@ index 0568ef452a1..88c07c89e81 100644
                btapp_gatts_conf_send_fail_cback(conn_id, status);
                return;
 diff --git a/system/stack/gatt/gatt_api.cc b/system/stack/gatt/gatt_api.cc
-index 365edec89b4..ead668893b4 100644
+index 365edec89b4..17009a15bc3 100644
 --- a/system/stack/gatt/gatt_api.cc
 +++ b/system/stack/gatt/gatt_api.cc
 @@ -33,6 +33,7 @@
@@ -122,7 +121,7 @@ index 365edec89b4..ead668893b4 100644
  
    if ((it->asgn_range.s_handle >= gatt_cb.hdl_cfg.app_start_hdl) &&
        gatt_cb.cb_info.p_nv_save_callback) {
-@@ -470,6 +515,41 @@ void GATTS_StopService(uint16_t service_handle) {
+@@ -470,6 +515,42 @@ void GATTS_StopService(uint16_t service_handle) {
    gatt_cb.srv_list_info->erase(it);
    gatt_update_last_srv_info();
  }
@@ -139,7 +138,8 @@ index 365edec89b4..ead668893b4 100644
 +    return true;
 +  }
 +
-+  tGATT_STATUS perm_check = gatts_notify_attr_perm_check(it->p_db, attr_handle, sec_flag, key_size);
++  tGATT_STATUS perm_check =
++          gatts_notify_attr_perm_check(it->p_db, attr_handle, sec_flag, key_size);
 +
 +  if (perm_check == GATT_INSUF_AUTHENTICATION || perm_check == GATT_INSUF_ENCRYPTION) {
 +    log::warn("Sending notification/indication, handle: 0x{:04x} bda: {} without proper security",
@@ -164,7 +164,7 @@ index 365edec89b4..ead668893b4 100644
  /*******************************************************************************
   *
   * Function         GATTs_HandleValueIndication
-@@ -510,6 +590,11 @@ tGATT_STATUS GATTS_HandleValueIndication(tCONN_ID conn_id, uint16_t attr_handle,
+@@ -510,6 +591,11 @@ tGATT_STATUS GATTS_HandleValueIndication(tCONN_ID conn_id, uint16_t attr_handle,
    memcpy(indication.value, p_val, val_len);
    indication.auth_req = GATT_AUTH_REQ_NONE;
  
@@ -176,8 +176,63 @@ index 365edec89b4..ead668893b4 100644
    uint16_t* indicate_handle_p = NULL;
    uint16_t cid;
  
-@@ -545,6 +630,13 @@ static tGATT_STATUS GATTS_HandleMultipleValueNotification_UpperTester(
-   uint16_t cid = gatt_tcb_get_att_cid(*p_tcb, true /* eatt support */);
+@@ -537,38 +623,6 @@ tGATT_STATUS GATTS_HandleValueIndication(tCONN_ID conn_id, uint16_t attr_handle,
+   return cmd_status;
+ }
+ 
+-#if (GATT_UPPER_TESTER_MULT_VARIABLE_LENGTH_NOTIF == TRUE)
+-static tGATT_STATUS GATTS_HandleMultipleValueNotification_UpperTester(
+-        tGATT_TCB* p_tcb, std::vector<tGATT_VALUE> gatt_notif_vector) {
+-  log::info("");
+-
+-  uint16_t cid = gatt_tcb_get_att_cid(*p_tcb, true /* eatt support */);
+-  uint16_t payload_size = gatt_tcb_get_payload_size(*p_tcb, cid);
+-
+-  /* TODO Handle too big packet size here. Not needed now for testing. */
+-  /* Just build the message. */
+-  BT_HDR* p_buf = (BT_HDR*)osi_malloc(sizeof(BT_HDR) + payload_size + L2CAP_MIN_OFFSET);
+-
+-  uint8_t* p = (uint8_t*)(p_buf + 1) + L2CAP_MIN_OFFSET;
+-  UINT8_TO_STREAM(p, GATT_HANDLE_MULTI_VALUE_NOTIF);
+-  p_buf->offset = L2CAP_MIN_OFFSET;
+-  p_buf->len = 1;
+-  for (auto notif : gatt_notif_vector) {
+-    log::info("Adding handle: 0x{:04x}, val len {}", notif.handle, notif.len);
+-    UINT16_TO_STREAM(p, notif.handle);
+-    p_buf->len += 2;
+-    UINT16_TO_STREAM(p, notif.len);
+-    p_buf->len += 2;
+-    ARRAY_TO_STREAM(p, notif.value, notif.len);
+-    p_buf->len += notif.len;
+-  }
+-
+-  log::info("Total len: {}", p_buf->len);
+-
+-  return attp_send_sr_msg(*p_tcb, cid, p_buf);
+-}
+-#endif
+-
+ tGATT_STATUS GATTS_HandleMultipleValueNotification(
+         tCONN_ID conn_id, const std::vector<tGATT_VALUE>& notifications) {
+   log::verbose("conn_id=0x{:x}, num_notifications={}", conn_id, notifications.size());
+@@ -593,7 +647,8 @@ tGATT_STATUS GATTS_HandleMultipleValueNotification(
+     return GATT_REQ_NOT_SUPPORTED;
+   }
+ 
+-  for (const auto& notif : notifications) {
++  std::vector<tGATT_VALUE> gatt_notif_vector = notifications;
++  for (auto& notif : gatt_notif_vector) {
+     if (!GATT_HANDLE_IS_VALID(notif.handle)) {
+       log::error("Invalid handle 0x{:04x}", notif.handle);
+       return GATT_ILLEGAL_PARAMETER;
+@@ -603,17 +658,25 @@ tGATT_STATUS GATTS_HandleMultipleValueNotification(
+                  notif.handle);
+       return GATT_ILLEGAL_PARAMETER;
+     }
++    notif.conn_id = conn_id;
+   }
+ 
+   uint16_t cid = gatt_tcb_get_att_cid(*p_tcb, p_reg->eatt_support);
    uint16_t payload_size = gatt_tcb_get_payload_size(*p_tcb, cid);
  
 +  for (const auto& notif : gatt_notif_vector) {
@@ -187,28 +242,59 @@ index 365edec89b4..ead668893b4 100644
 +    }
 +  }
 +
-   /* TODO Handle too big packet size here. Not needed now for testing. */
-   /* Just build the message. */
-   BT_HDR* p_buf = (BT_HDR*)osi_malloc(sizeof(BT_HDR) + payload_size + L2CAP_MIN_OFFSET);
-@@ -629,6 +721,17 @@ tGATT_STATUS GATTS_HandleMultipleValueNotification(
+   /* Build and send PDU(s). Each PDU starts with the opcode byte (1 byte).
+    * Each notification entry is: handle (2) + value_length (2) + value (N).
+    * If all notifications fit in one PDU, send them together; otherwise split
+    * across multiple PDUs. */
+   size_t idx = 0;
+-  while (idx < notifications.size()) {
++  while (idx < gatt_notif_vector.size()) {
+     BT_HDR* p_buf =
+             (BT_HDR*)osi_malloc(sizeof(BT_HDR) + payload_size + L2CAP_MIN_OFFSET);
+     if (p_buf == nullptr) {
+@@ -627,8 +690,8 @@ tGATT_STATUS GATTS_HandleMultipleValueNotification(
+     p_buf->len = 1; /* opcode byte */
+ 
      /* Pack as many notifications as fit in this PDU */
-     while (idx < notifications.size()) {
-       const tGATT_VALUE& notif = notifications[idx];
-+
-+      /* Add security check from cherry-pick */
-+      if (!check_notification_perm(p_tcb, notif.handle)) {
-+        /* Convert remaining notifications to vector for pending queue */
-+        std::vector<tGATT_VALUE> pending_notifs(notifications.begin() + idx, notifications.end());
-+        gatt_add_pending_multi_notif(p_tcb, &pending_notifs);
-+        /* Free the current buffer since we're not sending it */
-+        osi_free(p_buf);
-+        return GATT_PENDING;
-+      }
-+
+-    while (idx < notifications.size()) {
+-      const tGATT_VALUE& notif = notifications[idx];
++    while (idx < gatt_notif_vector.size()) {
++      const tGATT_VALUE& notif = gatt_notif_vector[idx];
        /* Each entry needs: handle(2) + value_length(2) + value(notif.len) */
        uint16_t entry_size = 4 + notif.len;
        if (p_buf->len + entry_size > payload_size) {
-@@ -741,11 +844,17 @@ tGATT_STATUS GATTS_HandleValueNotification(tCONN_ID conn_id, uint16_t attr_handl
+@@ -712,11 +775,11 @@ tGATT_STATUS GATTS_HandleValueNotification(tCONN_ID conn_id, uint16_t attr_handl
+       log::info("Storing first notification");
+       p_gatt_notif = &gatt_notif_vector[0];
+ 
++      p_gatt_notif->conn_id = conn_id;
+       p_gatt_notif->handle = attr_handle;
+       p_gatt_notif->len = val_len;
+       std::copy(p_val, p_val + val_len, p_gatt_notif->value);
+-
+-      notif.auth_req = GATT_AUTH_REQ_NONE;
++      p_gatt_notif->auth_req = GATT_AUTH_REQ_NONE;
+ 
+       cached_tcb_idx = tcb_idx;
+       return GATT_SUCCESS;
+@@ -727,13 +790,13 @@ tGATT_STATUS GATTS_HandleValueNotification(tCONN_ID conn_id, uint16_t attr_handl
+       cached_tcb_idx = 0xFF;
+       p_gatt_notif = &gatt_notif_vector[1];
+ 
++      p_gatt_notif->conn_id = conn_id;
+       p_gatt_notif->handle = attr_handle;
+       p_gatt_notif->len = val_len;
+       std::copy(p_val, p_val + val_len, p_gatt_notif->value);
++      p_gatt_notif->auth_req = GATT_AUTH_REQ_NONE;
+ 
+-      notif.auth_req = GATT_AUTH_REQ_NONE;
+-
+-      return GATTS_HandleMultipleValueNotification_UpperTester(p_tcb, gatt_notif_vector);
++      return GATTS_HandleMultipleValueNotification(conn_id, gatt_notif_vector);
+     }
+ 
+     log::error("PTS Mode: Invalid tcb_idx: {}, cached_tcb_idx: {}", tcb_idx, cached_tcb_idx);
+@@ -741,11 +804,17 @@ tGATT_STATUS GATTS_HandleValueNotification(tCONN_ID conn_id, uint16_t attr_handl
  #endif
  
    memset(&notif, 0, sizeof(notif));
@@ -226,7 +312,7 @@ index 365edec89b4..ead668893b4 100644
    tGATT_STATUS cmd_sent;
    tGATT_SR_MSG gatt_sr_msg;
    gatt_sr_msg.attr_value = notif;
-@@ -1508,7 +1617,6 @@ bool GATT_BR_Connect(tGATT_IF gatt_if, const RawAddress& bd_addr) {
+@@ -1508,7 +1577,6 @@ bool GATT_BR_Connect(tGATT_IF gatt_if, const RawAddress& bd_addr) {
                                                                                BTM_SEC_NONE);
    if (p_tcb->att_lcid == 0) {
      log::error("gatt_connect failed");
@@ -580,22 +666,8 @@ index 7d50e0df066..19d2899dfc5 100644
      p_tcb->conf_timer = alarm_new("gatt.conf_timer");
      p_tcb->ind_ack_timer = alarm_new("gatt.ind_ack_timer");
      p_tcb->in_use = true;
-diff --git a/system/stack/include/gatt_api.h b/system/stack/include/gatt_api.h
-index 2093dd47ff3..f6b00f26208 100644
---- a/system/stack/include/gatt_api.h
-+++ b/system/stack/include/gatt_api.h
-@@ -829,6 +829,9 @@ void GATTS_StopService(uint16_t service_handle);
- [[nodiscard]] tGATT_STATUS GATTS_HandleValueNotification(tCONN_ID conn_id, uint16_t attr_handle,
-                                                          uint16_t val_len, uint8_t* p_val);
- 
-+[[nodiscard]] tGATT_STATUS GATTS_HandleMultipleValueNotification(
-+        tCONN_ID conn_id, std::vector<tGATT_VALUE> gatt_notif_vector);
-+
- /*******************************************************************************
-  *
-  * Function         GATTS_HandleMultipleValueNotification
 diff --git a/system/stack/mock/mock_stack_gatt_api.cc b/system/stack/mock/mock_stack_gatt_api.cc
-index 373244b0cad..95e967ca2db 100644
+index 373244b0cad..1eaa31a0ec9 100644
 --- a/system/stack/mock/mock_stack_gatt_api.cc
 +++ b/system/stack/mock/mock_stack_gatt_api.cc
 @@ -56,6 +56,7 @@ struct GATTS_AddService GATTS_AddService;
@@ -618,8 +690,8 @@ index 373244b0cad..95e967ca2db 100644
    return test::mock::stack_gatt_api::GATTS_HandleValueNotification(conn_id, attr_handle, val_len,
                                                                     p_val);
  }
-+tGATT_STATUS GATTS_HandleMultipleValueNotification(uint16_t conn_id,
-+                                                   std::vector<tGATT_VALUE> notif_vector) {
++tGATT_STATUS GATTS_HandleMultipleValueNotification(
++        uint16_t conn_id, const std::vector<tGATT_VALUE>& notif_vector) {
 +  inc_func_call_count(__func__);
 +  return test::mock::stack_gatt_api::GATTS_HandleMultipleValueNotification(conn_id, notif_vector);
 +}
@@ -627,7 +699,7 @@ index 373244b0cad..95e967ca2db 100644
    inc_func_call_count(__func__);
    return test::mock::stack_gatt_api::GATTS_NVRegister(p_cb_info);
 diff --git a/system/stack/mock/mock_stack_gatt_api.h b/system/stack/mock/mock_stack_gatt_api.h
-index da609ca3451..c0ab22f9e8b 100644
+index da609ca3451..234fdf28ade 100644
 --- a/system/stack/mock/mock_stack_gatt_api.h
 +++ b/system/stack/mock/mock_stack_gatt_api.h
 @@ -230,6 +230,19 @@ struct GATTS_HandleValueNotification {
@@ -637,11 +709,11 @@ index da609ca3451..c0ab22f9e8b 100644
 +// Name: GATTS_HandleMultipleValueNotification
 +struct GATTS_HandleMultipleValueNotification {
 +  static tGATT_STATUS return_value;
-+  std::function<tGATT_STATUS(uint16_t conn_id, std::vector<tGATT_VALUE> notif_vector)> body{
-+          [](uint16_t /* conn_id */, std::vector<tGATT_VALUE> /* notif_vector */) {
++  std::function<tGATT_STATUS(uint16_t conn_id, const std::vector<tGATT_VALUE>& notif_vector)> body{
++          [](uint16_t /* conn_id */, const std::vector<tGATT_VALUE>& /* notif_vector */) {
 +            return return_value;
 +          }};
-+  tGATT_STATUS operator()(uint16_t conn_id, std::vector<tGATT_VALUE> notif_vector) {
++  tGATT_STATUS operator()(uint16_t conn_id, const std::vector<tGATT_VALUE>& notif_vector) {
 +    return body(conn_id, notif_vector);
 +  }
 +};
