@@ -1,7 +1,8 @@
-From c01b00bfacb76b166b80cdefe010ec81798421d3 Mon Sep 17 00:00:00 2001
+From 7a5382abb63be58554d5087eccf72d891346d417 Mon Sep 17 00:00:00 2001
 From: Aishwarya Mallampati <amallampati@google.com>
 Date: Thu, 7 May 2026 10:50:54 -0700
-Subject: [PATCH] Restrict USSD requests to the subscription's associated user.
+Subject: [PATCH 1/3] Restrict USSD requests to the subscription's associated
+ user.
 
 Add a permission check in handleUssdRequest to ensure that the calling user is associated with the provided subscription ID.
 

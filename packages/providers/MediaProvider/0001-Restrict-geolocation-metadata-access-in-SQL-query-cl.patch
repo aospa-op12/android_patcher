@@ -1,7 +1,7 @@
-From 5d58346aaf7666a9675ae61a95f36a20399da8da Mon Sep 17 00:00:00 2001
+From 189b88ec40088cdb3d27d911ab1cfaad7104e89e Mon Sep 17 00:00:00 2001
 From: Garvita Jain <garvitajain@google.com>
 Date: Tue, 31 Mar 2026 06:52:37 +0000
-Subject: [PATCH 1/5] Restrict geolocation metadata access in SQL query clauses
+Subject: [PATCH 1/7] Restrict geolocation metadata access in SQL query clauses
 
 * Return empty results if geolocation columns are used in SQL SELECTION,
   GROUP_BY, or HAVING clauses.

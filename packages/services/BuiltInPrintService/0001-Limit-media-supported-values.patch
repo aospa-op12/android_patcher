@@ -1,0 +1,169 @@
+From 901056b29b74d990f65e0825fb695773c57a43f2 Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@google.com>
+Date: Wed, 27 May 2026 13:39:29 -0600
+Subject: [PATCH] Limit media-supported values
+
+ipphelper parses media-col-ready, media-ready, and media-supported into
+a fixed-size array.  Add a check to make sure crafted
+Get-Printer-Attributes responses don't run past the end.
+
+Bug: 503542266
+Test: atest libwfds_ipphelper_test
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:852c02f88419183d0469e833f232e178cc6f53e0
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:d3e4806a36b4405b977e987bea7f48984a7a4b44
+Merged-In: I86726f3cadbde0e08ea6ecc39ca6ad98fa6e579c
+Change-Id: I86726f3cadbde0e08ea6ecc39ca6ad98fa6e579c
+---
+ jni/Android.bp                   | 38 ++++++++++++++++++++
+ jni/ipphelper/ipphelper.c        |  5 ++-
+ jni/ipphelper/ipphelper_test.cpp | 61 ++++++++++++++++++++++++++++++++
+ 3 files changed, 103 insertions(+), 1 deletion(-)
+ create mode 100644 jni/ipphelper/ipphelper_test.cpp
+
+diff --git a/jni/Android.bp b/jni/Android.bp
+index 971a813..d1fc7bd 100644
+--- a/jni/Android.bp
++++ b/jni/Android.bp
+@@ -15,6 +15,7 @@
+ 
+ package {
+     default_applicable_licenses: ["Android-Apache-2.0"],
++    default_team: "trendy_team_android_printing",
+ }
+ 
+ cc_library_shared {
+@@ -78,3 +79,40 @@ cc_library_shared {
+         "server_configurable_flags",
+     ],
+ }
++
++cc_test {
++    name: "libwfds_ipphelper_test",
++    gtest: true,
++    cflags: [
++        "-DINCLUDE_PDF=1",
++        "-Wno-unused-parameter",
++        "-Wno-sign-compare",
++        "-Wno-missing-field-initializers",
++        "-Wno-format",
++        "-Wno-missing-braces",
++        "-Wno-deprecated-declarations",
++    ],
++    srcs: [
++        "ipphelper/ipphelper_test.cpp",
++        // Compile the source file directly into the test to access all JNI symbols
++        "ipphelper/ipphelper.c",
++        "ipphelper/ipp_print.c",
++        "ipphelper/ippstatus_capabilities.c",
++    ],
++    local_include_dirs: [
++        "include",
++        "ipphelper",
++        "plugins/genPCLm/inc",
++    ],
++    static_libs: [
++        "bips_aconfig_flags_cc_lib",
++        "libjpeg_static_ndk",
++    ],
++    shared_libs: [
++        "libaconfig_storage_read_api_cc",
++        "libcups",
++        "liblog",
++        "libcutils",
++        "libz",
++    ],
++}
+diff --git a/jni/ipphelper/ipphelper.c b/jni/ipphelper/ipphelper.c
+index 8ad0447..0229d4f 100644
+--- a/jni/ipphelper/ipphelper.c
++++ b/jni/ipphelper/ipphelper.c
+@@ -1021,6 +1021,9 @@ static void addMediaIfNotDuplicate(
+         int *sizes_idx,
+         media_supported_t *media_supported,
+         media_size_t media_size) {
++    if (sizes_idx == NULL || *sizes_idx >= PAGE_STATUS_MAX) {
++      return;
++    }
+     if (idx >= 0) {
+         // Check if we've already added this media size to the supported list
+         bool isDuplicate = false;
+@@ -1154,7 +1157,7 @@ void parse_getMediaSupported(
+     // Append media-supported. media is de-duplicated later in java
+     if ((attrptr = ippFindAttribute(response, "media-supported", IPP_TAG_KEYWORD)) != NULL) {
+         LOGD("media-supported  found; number of values %d", ippGetCount(attrptr));
+-        for (i = 0; i < ippGetCount(attrptr); i++) {
++        for (i = 0; i < ippGetCount(attrptr) && sizes_idx < PAGE_STATUS_MAX; i++) {
+             idx = ipp_find_media_size(ippGetString(attrptr, i, NULL), &media_sizeTemp);
+ 
+             // Modified since anytime the find media size returned 0 it could either mean
+diff --git a/jni/ipphelper/ipphelper_test.cpp b/jni/ipphelper/ipphelper_test.cpp
+new file mode 100644
+index 0000000..bc1c65b
+--- /dev/null
++++ b/jni/ipphelper/ipphelper_test.cpp
+@@ -0,0 +1,61 @@
++#include <gtest/gtest.h>
++#include <string.h>
++
++extern "C" {
++#include "cups.h"
++#include "ipphelper.h"
++}
++
++class IppHelperTest : public ::testing::Test {
++ protected:
++  void SetUp() override { memset(&capabilities_, 0, sizeof(capabilities_)); }
++
++  printer_capabilities_t capabilities_;
++};
++
++TEST_F(IppHelperTest, ParseGetMediaSupported_AvoidsOverflow) {
++  // Initialize the structure as it would be in parse_printerAttributes
++  media_supported_t media_supported_;
++  for (int i = 0; i < PAGE_STATUS_MAX; i++) {
++    media_supported_.media_size[i] = (media_size_t)0;
++    media_supported_.idxKeywordTranTable[i] = -1;
++  }
++  int canary = 0xffffffff;  // Overwritten if media_supported_ overflows.
++
++  // 1. Construct a mock IPP response
++  ipp_t* response = ippNewRequest(IPP_GET_PRINTER_ATTRIBUTES);
++  ASSERT_NE(response, nullptr);
++
++  // Create 1000 values (exceeding PAGE_STATUS_MAX = 200)
++  // Use a valid keyword ("na_letter_8.5x11in") so ipp_find_media_size succeeds.
++  const int num_values = 1000;
++  const char* values[num_values];
++  for (int i = 0; i < num_values; i++) {
++    values[i] = "na_letter_8.5x11in";
++  }
++
++  // Add the "media-supported" attribute with 1000 values to the mock response
++  ippAddStrings(response, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-supported",
++                num_values, nullptr, values);
++
++  // 2. Call the function under test
++  // BEFORE the fix: This would trigger a stack buffer overflow / crash.
++  // AFTER the fix: This should return safely without crashing.
++  parse_getMediaSupported(response, &media_supported_, &capabilities_);
++
++  // 3. Count updated entries.
++  int written_count = 0;
++  for (int i = 0; i < PAGE_STATUS_MAX; i++) {
++    if (media_supported_.media_size[i] != 0) {
++      written_count++;
++    }
++  }
++
++  // Expect exactly PAGE_STATUS_MAX (200) entries to be written and the canary
++  // to be intact.
++  EXPECT_EQ(written_count, PAGE_STATUS_MAX);
++  EXPECT_EQ(capabilities_.numSupportedMediaReadySizes, 0);
++  EXPECT_EQ(canary, 0xffffffff);
++
++  ippDelete(response);
++}
+-- 
+2.55.0
+

@@ -1,0 +1,40 @@
+From 5c1b7c5636852263f51e5208a842f9922c043739 Mon Sep 17 00:00:00 2001
+From: Howard Chen <howardsoc@google.com>
+Date: Wed, 17 Jun 2026 11:46:05 +0800
+Subject: [PATCH] libfiemap: Return false in MapAllImages if metadata is
+ missing
+
+When metadata_dir_ does not exist during MapAllImages, return false
+instead of true. Previously, returning true caused first-stage init
+to incorrectly assume DSU images were mapped and running when an invalid
+or non-existent DSU slot (such as ".") was provided. This fooled init into
+setting ro.gsid.image_running=1, leading gatekeeperd to apply a GSI
+user ID offset and causing persistent host PIN lockout (DoS).
+
+Bug: 514747079
+Test: TH / Manual
+(cherry picked from commit edb7e21425c13a5383250343d37b6877ba5e73ea)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:b45a97df706507efa401e4a93170753130d028b2
+Merged-In: I103689be4b65f4e95ff9f44f261debc7d46ae9e7
+Change-Id: I103689be4b65f4e95ff9f44f261debc7d46ae9e7
+---
+ libfiemap/image_manager.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/libfiemap/image_manager.cpp b/libfiemap/image_manager.cpp
+index 435f7bd..18110b1 100644
+--- a/libfiemap/image_manager.cpp
++++ b/libfiemap/image_manager.cpp
+@@ -742,7 +742,8 @@ bool ImageManager::GetMappedImageDevice(const std::string& name, std::string* de
+ 
+ bool ImageManager::MapAllImages(const std::function<bool(std::set<std::string>)>& init) {
+     if (!MetadataExists(metadata_dir_)) {
+-        return true;
++        LOG(ERROR) << "Metadata directory does not exist: " << metadata_dir_;
++        return false;
+     }
+ 
+     auto metadata = OpenMetadata(metadata_dir_);
+-- 
+2.55.0
+

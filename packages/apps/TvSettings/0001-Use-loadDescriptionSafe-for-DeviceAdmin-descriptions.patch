@@ -1,0 +1,54 @@
+From 687f4f5b9b7f41e878440bcfa293973021d0f65e Mon Sep 17 00:00:00 2001
+From: Gabriel Roman <gabrielroman@google.com>
+Date: Fri, 15 May 2026 04:20:04 -0700
+Subject: [PATCH] Use loadDescriptionSafe for DeviceAdmin descriptions.
+
+Replace calls to DeviceAdminInfo.loadDescription with
+loadDescriptionSafe to truncate the description string length to a safe
+1024 characters limit.
+
+Bug: 492093013
+Test: manual
+Flag: EXEMPT BUGFIX
+Replace calls to DeviceAdminInfo.loadDescription with loadDescriptionSafe to truncate the description string length to a safe 1024 characters limit.
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:ba8d79488422b1a4a69b2dd4821cfff27fcd0024
+Security vulnerability cherry pick for https://b.corp.google.com/issues/492093013
+Topic: https://googleplex-android-review.git.corp.google.com/q/topic:%22b492093013%22
+#b/492093013
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:80d633f7204a8c1b7679b4143bae3860f5367dd7
+Merged-In: I68af0d4e0e1af30db9423f9c70dea9a2b4c70c27
+Change-Id: I68af0d4e0e1af30db9423f9c70dea9a2b4c70c27
+---
+ .../src/com/android/tv/settings/deviceadmin/DeviceAdminAdd.java | 2 +-
+ .../android/tv/settings/deviceadmin/DeviceAdminListItem.java    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminAdd.java b/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminAdd.java
+index 5832a20..6685c0d 100644
+--- a/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminAdd.java
++++ b/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminAdd.java
+@@ -446,7 +446,7 @@ public class DeviceAdminAdd extends FragmentActivity {
+         mAdminName.setText(mDeviceAdmin.loadLabel(getPackageManager()));
+         try {
+             mAdminDescription.setText(
+-                    mDeviceAdmin.loadDescription(getPackageManager()));
++                    mDeviceAdmin.loadDescriptionSafe(getPackageManager()));
+             mAdminDescription.setVisibility(View.VISIBLE);
+         } catch (Resources.NotFoundException e) {
+             mAdminDescription.setVisibility(View.GONE);
+diff --git a/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminListItem.java b/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminListItem.java
+index f1acf5d..df5ace6 100644
+--- a/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminListItem.java
++++ b/Settings/src/com/android/tv/settings/deviceadmin/DeviceAdminListItem.java
+@@ -52,7 +52,7 @@ public class DeviceAdminListItem implements Comparable<DeviceAdminListItem> {
+         final PackageManager pm = context.getPackageManager();
+         mName = mInfo.loadLabel(pm);
+         try {
+-            mDescription = mInfo.loadDescription(pm);
++            mDescription = mInfo.loadDescriptionSafe(pm);
+         } catch (Resources.NotFoundException exception) {
+             Log.w(TAG, "Setting description to null because can't find resource: " + mKey);
+         }
+-- 
+2.55.0
+

@@ -1,0 +1,44 @@
+From c0f4e167a79132de7c4a89872fb6e067cc5806b4 Mon Sep 17 00:00:00 2001
+From: Mihai Stancu <mihaistancu@google.com>
+Date: Mon, 6 Apr 2026 16:43:15 +0000
+Subject: [PATCH 6/8] Sanitize package labels in SettingsApplication
+
+Forces all loadLabel() calls to sanitize package labels
+globally by invoking PackageItemInfo.forceSafeLabels()
+during onCreate().
+
+Bug: 488559440
+Test: manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:50d61685ab9b6e03996f6b93cc8b0fc337e8410c
+Merged-In: I8ce8a122a473df7282eef283b1b13ce33c2ad9a3
+Change-Id: I8ce8a122a473df7282eef283b1b13ce33c2ad9a3
+---
+ src/com/android/settings/SettingsApplication.java | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/com/android/settings/SettingsApplication.java b/src/com/android/settings/SettingsApplication.java
+index 8aedde04b20..9ca7a771226 100644
+--- a/src/com/android/settings/SettingsApplication.java
++++ b/src/com/android/settings/SettingsApplication.java
+@@ -26,6 +26,7 @@ package com.android.settings;
+ 
+ import android.app.Application;
+ import android.content.Context;
++import android.content.pm.PackageItemInfo;
+ import android.content.pm.PackageManager;
+ import android.database.ContentObserver;
+ import android.hardware.fingerprint.FingerprintManager;
+@@ -89,6 +90,9 @@ public class SettingsApplication extends Application {
+     public void onCreate() {
+         super.onCreate();
+ 
++        // Force all loadLabel() calls to sanitize package labels
++        PackageItemInfo.forceSafeLabels();
++
+         if (Flags.catalyst()) {
+             CatalystFlagProviderFactory.INSTANCE.setProvider(
+                     new CatalystFlagProvider() {
+-- 
+2.55.0
+

@@ -1,0 +1,104 @@
+From 206bf7162a4850b6c9090e9325be6ccb552168ae Mon Sep 17 00:00:00 2001
+From: Aishwarya Mallampati <amallampati@google.com>
+Date: Wed, 17 Jun 2026 15:16:44 -0700
+Subject: [PATCH 3/3] Fix StackOverflowError in SatelliteEntitlementController
+
+Bug: 517377772
+Test: SatelliteEntitlementApiTest
+Flag: EXEMPT BUGFIX
+
+(cherry picked from commit 1f8bcf87291750ffeab00af17b9b82e8333f62b6)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:46f9a0f54f8a58cda37bf76004b34ac1d3e5dbce
+Merged-In: I2a7f435026d66424bbab400a2d93261f5f8d1577
+Change-Id: I2a7f435026d66424bbab400a2d93261f5f8d1577
+---
+ .../entitlement/SatelliteEntitlementApi.java  | 17 +++++++---
+ .../SatelliteEntitlementApiTest.java          | 32 +++++++++++++++++++
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApi.java b/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApi.java
+index c2bf35a..2207036 100644
+--- a/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApi.java
++++ b/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApi.java
+@@ -77,11 +77,18 @@ public class SatelliteEntitlementApi {
+ 
+         String response = queryEntitlementStatus(
+                 ServiceEntitlement.APP_SATELLITE_ENTITLEMENT, request);
+-        SatelliteEntitlementResponse satelliteEntitlementResponse =
+-                new SatelliteEntitlementResponse(response);
+-        return new SatelliteEntitlementResult(satelliteEntitlementResponse.getEntitlementStatus(),
+-                satelliteEntitlementResponse.getPlmnAllowed(),
+-                satelliteEntitlementResponse.getPlmnBarredList());
++        try {
++            SatelliteEntitlementResponse satelliteEntitlementResponse =
++                    new SatelliteEntitlementResponse(response);
++            return new SatelliteEntitlementResult(
++                    satelliteEntitlementResponse.getEntitlementStatus(),
++                    satelliteEntitlementResponse.getPlmnAllowed(),
++                    satelliteEntitlementResponse.getPlmnBarredList());
++        } catch (Throwable t) {
++            throw new ServiceEntitlementException(
++                    ServiceEntitlementException.ERROR_MALFORMED_HTTP_RESPONSE,
++                    "Failed to parse entitlement response", t);
++        }
+     }
+ 
+     /**
+diff --git a/tests/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApiTest.java b/tests/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApiTest.java
+index 71be0da..8ea664b 100644
+--- a/tests/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApiTest.java
++++ b/tests/src/com/android/phone/satellite/entitlement/SatelliteEntitlementApiTest.java
+@@ -24,6 +24,7 @@ import static com.android.phone.satellite.entitlement.SatelliteEntitlementResult
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertTrue;
++import static org.junit.Assert.fail;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.anyInt;
+ import static org.mockito.ArgumentMatchers.eq;
+@@ -41,6 +42,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
+ import com.android.internal.telephony.satellite.SatelliteConfig;
+ import com.android.internal.telephony.satellite.SatelliteController;
+ import com.android.libraries.entitlement.ServiceEntitlement;
++import com.android.libraries.entitlement.ServiceEntitlementException;
+ import com.android.libraries.entitlement.ServiceEntitlementRequest;
+ 
+ import org.junit.After;
+@@ -194,4 +196,34 @@ public class SatelliteEntitlementApiTest {
+                 + "\"PLMNAllowed\":[{\"PLMN\":\"31026\",\"DataPlanType\":\"unmetered\"},"
+                 + "{\"PLMN\":\"302820\",\"DataPlanType\":\"metered\"}]" : "";
+     }
++
++    @Test
++    public void testCheckEntitlementStatus_maliciousJson_throwsException() throws Exception {
++        // Generate a deeply nested JSON to trigger StackOverflowError
++        String maliciousJson = getDeeplyNestedJson(10000);
++
++        doReturn(maliciousJson)
++                .when(mServiceEntitlement)
++                .queryEntitlementStatus(eq(ServiceEntitlement.APP_SATELLITE_ENTITLEMENT), any());
++
++        try {
++            mSatelliteEntitlementAPI.checkEntitlementStatus();
++            fail("Expected ServiceEntitlementException");
++        } catch (ServiceEntitlementException e) {
++            assertEquals(ServiceEntitlementException.ERROR_MALFORMED_HTTP_RESPONSE, e.getErrorCode());
++            assertTrue(e.getCause() instanceof StackOverflowError);
++        }
++    }
++
++    private String getDeeplyNestedJson(int depth) {
++        StringBuilder sb = new StringBuilder();
++        for (int i = 0; i < depth; i++) {
++            sb.append("{\"a\":");
++        }
++        sb.append("1");
++        for (int i = 0; i < depth; i++) {
++            sb.append("}");
++        }
++        return sb.toString();
++    }
+ }
+-- 
+2.55.0
+

@@ -1,7 +1,7 @@
-From d72a774c737a0bac53cb0bf88b88cf0f93862b14 Mon Sep 17 00:00:00 2001
+From be3fc4f51bdb5c8db65ce3890eb1246069c32c0a Mon Sep 17 00:00:00 2001
 From: Mohit kumar <imohit@google.com>
 Date: Tue, 17 Mar 2026 15:00:01 +0000
-Subject: [PATCH 2/5] RESTRICT AUTOMERGE Fix ISO XMP location redaction bypass
+Subject: [PATCH 2/7] RESTRICT AUTOMERGE Fix ISO XMP location redaction bypass
 
 MediaProvider previously failed to redact location data when it was
 stored as attributes within an 'XMP_' box in ISO media files. This

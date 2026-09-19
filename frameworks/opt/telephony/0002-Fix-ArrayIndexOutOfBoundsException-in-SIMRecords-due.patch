@@ -1,0 +1,204 @@
+From 1a19fca3fff19ff05ac5369f2c8db7031034db5a Mon Sep 17 00:00:00 2001
+From: Arun <arunvoddu@google.com>
+Date: Sat, 13 Jun 2026 08:45:56 +0000
+Subject: [PATCH 2/2] Fix ArrayIndexOutOfBoundsException in SIMRecords due to
+ invalid EF_CFIS/EF_CFF
+
+A hostile or malformed SIM card can advertise an EF_CFIS with a record
+size of 1, or an empty EF_CFF_CPHS. This leads to an uncaught
+ArrayIndexOutOfBoundsException in the com.android.phone process when
+parsing these records in onAllRecordsLoaded(), which is called from a
+finally block in SIMRecords.handleMessage(). Because the exception is
+uncaught, it crashes the persistent com.android.phone process, triggering
+a continuous crash-loop and rendering all cellular services unavailable.
+
+Fix this by:
+1. Enhancing validEfCfis() to verify that the EF_CFIS data is at least
+   16 bytes (the spec-mandated size). This ensures we can safely read and
+   write all fields up to the maximum offset (15) without out-of-bounds
+   accesses.
+2. Guarding all accesses to mEfCff[0] with a length check (mEfCff.length > 0)
+   to prevent crashes if the CPHS Call Forwarding Flags file is empty.
+
+These changes prevent the crash-loop and keep the device functional,
+gracefully ignoring the invalid SIM data.
+
+Test: atest SIMRecordsTest
+Flag: EXEMPT bugfix
+Bug: 517377278
+TAG=agy
+CONV=d2b601e9-695b-4692-a523-d4db93054894
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:645a5868193e3009bc8000dcbe68b3d8dcedb0d2
+Merged-In: I3f22d63e9f5a871eb2eaf8c5aaea95a467703c86
+Change-Id: I3f22d63e9f5a871eb2eaf8c5aaea95a467703c86
+---
+ .../internal/telephony/uicc/SIMRecords.java   |  14 ++-
+ .../telephony/uicc/SIMRecordsTest.java        | 105 ++++++++++++++++++
+ 2 files changed, 114 insertions(+), 5 deletions(-)
+
+diff --git a/src/java/com/android/internal/telephony/uicc/SIMRecords.java b/src/java/com/android/internal/telephony/uicc/SIMRecords.java
+index ba011e6a61..c9a0f4c4a0 100644
+--- a/src/java/com/android/internal/telephony/uicc/SIMRecords.java
++++ b/src/java/com/android/internal/telephony/uicc/SIMRecords.java
+@@ -179,11 +179,13 @@ public class SIMRecords extends IccRecords {
+     private static final int EVENT_SET_MBDN_DONE = 20 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_SMS_ON_SIM = 21 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_GET_SMS_DONE = 22 + SIM_RECORD_EVENT_BASE;
+-    private static final int EVENT_GET_CFF_DONE = 24 + SIM_RECORD_EVENT_BASE;
++    @VisibleForTesting
++    static final int EVENT_GET_CFF_DONE = 24 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_SET_CPHS_MAILBOX_DONE = 25 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_GET_INFO_CPHS_DONE = 26 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_SET_MSISDN_DONE = 30 + SIM_RECORD_EVENT_BASE;
+-    private static final int EVENT_GET_CFIS_DONE = 32 + SIM_RECORD_EVENT_BASE;
++    @VisibleForTesting
++    static final int EVENT_GET_CFIS_DONE = 32 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_GET_CSP_CPHS_DONE = 33 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_GET_GID1_DONE = 34 + SIM_RECORD_EVENT_BASE;
+     private static final int EVENT_GET_GID2_DONE = 36 + SIM_RECORD_EVENT_BASE;
+@@ -506,7 +508,9 @@ public class SIMRecords extends IccRecords {
+ 
+     // Validate data is not null and not empty.
+     private boolean validEfCfis(byte[] data) {
+-        if (data != null) {
++        if (data != null && data.length >= 16) {
++            // EF_CFIS record size is 16 bytes per TS 51.011 Section 10.3.46.
++            // We must have at least 16 bytes to safely read and write all fields (up to offset 15).
+             if (data[0] < 1 || data[0] > 4) {
+                 // The MSP (Multiple Subscriber Profile) byte should be between
+                 // 1 and 4 according to ETSI TS 131 102 v11.3.0 section 4.2.64.
+@@ -611,7 +615,7 @@ public class SIMRecords extends IccRecords {
+                         + " invalid mEfCfis=" + IccUtils.bytesToHexString(mEfCfis));
+             }
+ 
+-            if (mEfCff != null) {
++            if (mEfCff != null && mEfCff.length > 0) {
+                 if (enable) {
+                     mEfCff[0] = (byte) ((mEfCff[0] & CFF_LINE1_RESET)
+                             | CFF_UNCONDITIONAL_ACTIVE);
+@@ -1562,7 +1566,7 @@ public class SIMRecords extends IccRecords {
+             // Refer TS 51.011 Section 10.3.46 for the content description
+             mCallForwardingStatus = (mEfCfis[1] & 0x01);
+             log("EF_CFIS: callForwardingEnabled=" + mCallForwardingStatus);
+-        } else if (mEfCff != null) {
++        } else if (mEfCff != null && mEfCff.length > 0) {
+             mCallForwardingStatus =
+                     ((mEfCff[0] & CFF_LINE1_MASK) == CFF_UNCONDITIONAL_ACTIVE) ?
+                             CALL_FORWARDING_STATUS_ENABLED : CALL_FORWARDING_STATUS_DISABLED;
+diff --git a/tests/telephonytests/src/com/android/internal/telephony/uicc/SIMRecordsTest.java b/tests/telephonytests/src/com/android/internal/telephony/uicc/SIMRecordsTest.java
+index 40765019bd..cefbcebe0f 100644
+--- a/tests/telephonytests/src/com/android/internal/telephony/uicc/SIMRecordsTest.java
++++ b/tests/telephonytests/src/com/android/internal/telephony/uicc/SIMRecordsTest.java
+@@ -1034,4 +1034,109 @@ public class SIMRecordsTest extends TelephonyTest {
+         }
+         assertEquals("Service Unbound", condition.expected(), condition.actual());
+     }
++
++    @Test
++    public void testEfCfisTooShortDoesNotCrash() {
++        // Mock EF_CFIS to return a 1-byte array (record size 1), which is invalid
++        // per spec (TS 51.011 requires 16 bytes).
++        doAnswer(
++                invocation -> {
++                    Message response = invocation.getArgument(2); // Message is at index 2
++                    AsyncResult.forMessage(response, new byte[]{0x01}, null);
++                    response.sendToTarget();
++                    return null;
++                }
++        ).when(mFhMock).loadEFLinearFixed(eq(SIMRecords.EF_CFIS), anyInt(), any(Message.class));
++
++        // Mock EF_CFF_CPHS to return valid data (1 byte) to isolate EF_CFIS failure
++        doAnswer(
++                invocation -> {
++                    Message response = invocation.getArgument(1);
++                    AsyncResult.forMessage(response, new byte[]{0x00}, null);
++                    response.sendToTarget();
++                    return null;
++                }
++        ).when(mFhMock).loadEFTransparent(eq(SIMRecords.EF_CFF_CPHS), any(Message.class));
++
++        // Set state to trigger onAllRecordsLoaded() when the event completes
++        setProtectedField(mSIMRecordsUT, "mRecordsRequested", true);
++        setProtectedField(mSIMRecordsUT, "mRecordsToLoad", 1);
++
++        // Trigger the record loading by sending the event directly to the handler.
++        // This simulates the completion of the EF_CFIS load.
++        Message msg = mSIMRecordsUT.obtainMessage(SIMRecords.EVENT_GET_CFIS_DONE);
++        AsyncResult.forMessage(msg, new byte[]{0x01}, null);
++        mSIMRecordsUT.handleMessage(msg);
++        mTestLooper.dispatchAll();
++
++        // If the bug is present, the looper dispatch above will throw
++        // ArrayIndexOutOfBoundsException when mSIMRecordsUT attempts to access
++        // mEfCfis[1] in setVoiceCallForwardingFlagFromSimRecords().
++        //
++        // If the fix is applied, it will handle it gracefully and not crash.
++        // We verify that the forwarding status is set to UNKNOWN (-1) since both
++        // EF_CFIS and EF_CFF are invalid/missing.
++        assertEquals(IccRecords.CALL_FORWARDING_STATUS_UNKNOWN,
++                mSIMRecordsUT.getVoiceCallForwardingFlag());
++    }
++
++    @Test
++    public void testEfCffEmptyDoesNotCrash() {
++        // Mock EF_CFIS to fail/be invalid so the code falls back to EF_CFF
++        doAnswer(
++                invocation -> {
++                    Message response = invocation.getArgument(2);
++                    AsyncResult.forMessage(response, null, new RuntimeException("Simulated error"));
++                    response.sendToTarget();
++                    return null;
++                }
++        ).when(mFhMock).loadEFLinearFixed(eq(SIMRecords.EF_CFIS), anyInt(), any(Message.class));
++
++        // Mock EF_CFF_CPHS to return 0 bytes (invalid, spec requires >= 1 byte)
++        doAnswer(
++                invocation -> {
++                    Message response = invocation.getArgument(1);
++                    AsyncResult.forMessage(response, new byte[0], null); // 0 bytes!
++                    response.sendToTarget();
++                    return null;
++                }
++        ).when(mFhMock).loadEFTransparent(eq(SIMRecords.EF_CFF_CPHS), any(Message.class));
++
++        // Set state to trigger onAllRecordsLoaded() when the event completes
++        setProtectedField(mSIMRecordsUT, "mRecordsRequested", true);
++        setProtectedField(mSIMRecordsUT, "mRecordsToLoad", 1);
++
++        // Trigger the CFF load completion
++        Message msg = mSIMRecordsUT.obtainMessage(SIMRecords.EVENT_GET_CFF_DONE);
++        AsyncResult.forMessage(msg, new byte[0], null);
++        mSIMRecordsUT.handleMessage(msg);
++        mTestLooper.dispatchAll();
++
++        // If the bug is present, this will throw ArrayIndexOutOfBoundsException
++        // when attempting to access mEfCff[0] in setVoiceCallForwardingFlagFromSimRecords().
++        //
++        // If fixed, it will complete without crashing.
++    }
++
++    private void setProtectedField(Object obj, String fieldName, Object value) {
++        try {
++            Class<?> clazz = obj.getClass();
++            java.lang.reflect.Field field = null;
++            while (clazz != null) {
++                try {
++                    field = clazz.getDeclaredField(fieldName);
++                    break;
++                } catch (NoSuchFieldException e) {
++                    clazz = clazz.getSuperclass();
++                }
++            }
++            if (field == null) {
++                throw new NoSuchFieldException(fieldName);
++            }
++            field.setAccessible(true);
++            field.set(obj, value);
++        } catch (Exception e) {
++            throw new RuntimeException(e);
++        }
++    }
+ }
+-- 
+2.55.0
+

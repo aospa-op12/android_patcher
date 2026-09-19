@@ -1,7 +1,7 @@
-From f7dd994e3e3e53dc9fbb1adeee7fb72ad1a8d050 Mon Sep 17 00:00:00 2001
+From 0f99f106f8ace71010c7d623ccbdac3f10105dae Mon Sep 17 00:00:00 2001
 From: Venkatarama Avadhani <venkataramaa@google.com>
 Date: Wed, 20 May 2026 11:56:27 +0530
-Subject: [PATCH 2/3] Fix signed overflow in convertCleanApertureToRect
+Subject: [PATCH 2/8] Fix signed overflow in convertCleanApertureToRect
 
 In HeifCleanAperture.cpp:convertCleanApertureToRect(),
 centerX.getInt32() and centerY.getInt32() are added with clapW and

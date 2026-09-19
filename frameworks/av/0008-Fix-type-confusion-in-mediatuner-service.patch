@@ -1,0 +1,251 @@
+From 53aed2eecfb56d27571c080fe3fd3b335c2bd26c Mon Sep 17 00:00:00 2001
+From: sadiqsada <sadiqsada@google.com>
+Date: Tue, 30 Jun 2026 17:16:49 -0700
+Subject: [PATCH 8/8] Fix type confusion in mediatuner service
+
+Unprivileged apps could pass remote binder proxies or custom binder stubs to mediatuner methods such as ITunerDvr::attachFilter, ITunerDemux::getAvSyncHwId, ITunerFilter::setDataSource, ITunerDescrambler::setDemuxSource, and ITunerFrontend::setLnb.
+
+The mediatuner daemon downcasted these interface pointers to local implementation classes using static_cast without checking if they were remote proxies. This resulted in reading member variables out-of-bounds relative to the proxy allocation, causing type confusion and memory corruption.
+
+This change adds isRemote() validation checks across all affected AIDL and HIDL service call sites to reject remote proxy binders with Result::INVALID_ARGUMENT.
+
+Bug: 514727559
+Test: Tested with custom PoC and valid object flows on Gambit device
+Flag: EXEMPT BUGFIX
+
+TAG=agy
+CONV=b1db51a1-e8eb-4c27-9029-027db881f867
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:c2ccf3231695bbb8b144813fe269f9b89624fad3
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:e47b7ea77d3ae38399865faa9166c5cd3e6fef07
+Merged-In: Id786837e7dda012109bedf46b95b5e133f898ae3
+Change-Id: Id786837e7dda012109bedf46b95b5e133f898ae3
+---
+ services/tuner/TunerDemux.cpp                |  4 ++++
+ services/tuner/TunerDescrambler.cpp          | 12 ++++++++++++
+ services/tuner/TunerDvr.cpp                  |  4 ++--
+ services/tuner/TunerFilter.cpp               |  2 +-
+ services/tuner/TunerFrontend.cpp             |  2 +-
+ services/tuner/hidl/TunerHidlDemux.cpp       |  6 ++++++
+ services/tuner/hidl/TunerHidlDescrambler.cpp | 12 ++++++++++++
+ services/tuner/hidl/TunerHidlDvr.cpp         |  4 ++--
+ services/tuner/hidl/TunerHidlFilter.cpp      |  2 +-
+ services/tuner/hidl/TunerHidlFrontend.cpp    |  2 +-
+ 10 files changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/services/tuner/TunerDemux.cpp b/services/tuner/TunerDemux.cpp
+index a80a88e9f1..bedbbf50e7 100644
+--- a/services/tuner/TunerDemux.cpp
++++ b/services/tuner/TunerDemux.cpp
+@@ -97,6 +97,10 @@ TunerDemux::~TunerDemux() {
+ 
+ ::ndk::ScopedAStatus TunerDemux::getAvSyncHwId(const shared_ptr<ITunerFilter>& tunerFilter,
+                                                int32_t* _aidl_return) {
++    if (tunerFilter == nullptr || tunerFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     shared_ptr<IFilter> halFilter = (static_cast<TunerFilter*>(tunerFilter.get()))->getHalFilter();
+     return mDemux->getAvSyncHwId(halFilter, _aidl_return);
+ }
+diff --git a/services/tuner/TunerDescrambler.cpp b/services/tuner/TunerDescrambler.cpp
+index c1214bdbb5..18f570a587 100644
+--- a/services/tuner/TunerDescrambler.cpp
++++ b/services/tuner/TunerDescrambler.cpp
+@@ -49,6 +49,10 @@ TunerDescrambler::~TunerDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerDescrambler::setDemuxSource(
+         const shared_ptr<ITunerDemux>& in_tunerDemux) {
++    if (in_tunerDemux == nullptr || in_tunerDemux->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     return mDescrambler->setDemuxSource((static_cast<TunerDemux*>(in_tunerDemux.get()))->getId());
+ }
+ 
+@@ -58,6 +62,10 @@ TunerDescrambler::~TunerDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerDescrambler::addPid(
+         const DemuxPid& in_pid, const shared_ptr<ITunerFilter>& in_optionalSourceFilter) {
++    if (in_optionalSourceFilter != nullptr && in_optionalSourceFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     shared_ptr<IFilter> halFilter =
+             (in_optionalSourceFilter == nullptr)
+                     ? nullptr
+@@ -68,6 +76,10 @@ TunerDescrambler::~TunerDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerDescrambler::removePid(
+         const DemuxPid& in_pid, const shared_ptr<ITunerFilter>& in_optionalSourceFilter) {
++    if (in_optionalSourceFilter != nullptr && in_optionalSourceFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     shared_ptr<IFilter> halFilter =
+             (in_optionalSourceFilter == nullptr)
+                     ? nullptr
+diff --git a/services/tuner/TunerDvr.cpp b/services/tuner/TunerDvr.cpp
+index 0e1b0fa5e9..56a4e0319f 100644
+--- a/services/tuner/TunerDvr.cpp
++++ b/services/tuner/TunerDvr.cpp
+@@ -52,7 +52,7 @@ TunerDvr::~TunerDvr() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerDvr::attachFilter(const shared_ptr<ITunerFilter>& in_filter) {
+-    if (in_filter == nullptr) {
++    if (in_filter == nullptr || in_filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+@@ -67,7 +67,7 @@ TunerDvr::~TunerDvr() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerDvr::detachFilter(const shared_ptr<ITunerFilter>& in_filter) {
+-    if (in_filter == nullptr) {
++    if (in_filter == nullptr || in_filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+diff --git a/services/tuner/TunerFilter.cpp b/services/tuner/TunerFilter.cpp
+index e393c4417d..128c4e4867 100644
+--- a/services/tuner/TunerFilter.cpp
++++ b/services/tuner/TunerFilter.cpp
+@@ -149,7 +149,7 @@ TunerFilter::~TunerFilter() {
+ 
+ ::ndk::ScopedAStatus TunerFilter::setDataSource(const shared_ptr<ITunerFilter>& filter) {
+     Mutex::Autolock _l(mLock);
+-    if (filter == nullptr) {
++    if (filter == nullptr || filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+diff --git a/services/tuner/TunerFrontend.cpp b/services/tuner/TunerFrontend.cpp
+index 081596abdc..4d9a38ebb9 100644
+--- a/services/tuner/TunerFrontend.cpp
++++ b/services/tuner/TunerFrontend.cpp
+@@ -74,7 +74,7 @@ TunerFrontend::~TunerFrontend() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerFrontend::setLnb(const shared_ptr<ITunerLnb>& lnb) {
+-    if (lnb == nullptr) {
++    if (lnb == nullptr || lnb->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+diff --git a/services/tuner/hidl/TunerHidlDemux.cpp b/services/tuner/hidl/TunerHidlDemux.cpp
+index bbb7782ca6..e5f85937da 100644
+--- a/services/tuner/hidl/TunerHidlDemux.cpp
++++ b/services/tuner/hidl/TunerHidlDemux.cpp
+@@ -18,11 +18,13 @@
+ 
+ #include "TunerHidlDemux.h"
+ 
++#include <aidl/android/hardware/tv/tuner/Result.h>
+ #include "TunerHidlDvr.h"
+ #include "TunerHidlFilter.h"
+ #include "TunerHidlService.h"
+ #include "TunerHidlTimeFilter.h"
+ 
++using ::aidl::android::hardware::tv::tuner::Result;
+ using ::aidl::android::hardware::tv::tuner::DemuxFilterSubType;
+ 
+ using HidlDemuxAlpFilterType = ::android::hardware::tv::tuner::V1_0::DemuxAlpFilterType;
+@@ -140,6 +142,10 @@ TunerHidlDemux::~TunerHidlDemux() {
+ 
+ ::ndk::ScopedAStatus TunerHidlDemux::getAvSyncHwId(const shared_ptr<ITunerFilter>& tunerFilter,
+                                                    int32_t* _aidl_return) {
++    if (tunerFilter == nullptr || tunerFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     uint32_t avSyncHwId;
+     HidlResult res;
+     sp<HidlIFilter> halFilter = static_cast<TunerHidlFilter*>(tunerFilter.get())->getHalFilter();
+diff --git a/services/tuner/hidl/TunerHidlDescrambler.cpp b/services/tuner/hidl/TunerHidlDescrambler.cpp
+index 51b7edeb12..de0148b4e5 100644
+--- a/services/tuner/hidl/TunerHidlDescrambler.cpp
++++ b/services/tuner/hidl/TunerHidlDescrambler.cpp
+@@ -45,6 +45,10 @@ TunerHidlDescrambler::~TunerHidlDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerHidlDescrambler::setDemuxSource(
+         const shared_ptr<ITunerDemux>& in_tunerDemux) {
++    if (in_tunerDemux == nullptr || in_tunerDemux->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     HidlResult res = mDescrambler->setDemuxSource(
+             static_cast<TunerHidlDemux*>(in_tunerDemux.get())->getId());
+     if (res != HidlResult::SUCCESS) {
+@@ -63,6 +67,10 @@ TunerHidlDescrambler::~TunerHidlDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerHidlDescrambler::addPid(
+         const DemuxPid& in_pid, const shared_ptr<ITunerFilter>& in_optionalSourceFilter) {
++    if (in_optionalSourceFilter != nullptr && in_optionalSourceFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     sp<HidlIFilter> halFilter =
+             (in_optionalSourceFilter == nullptr)
+                     ? nullptr
+@@ -76,6 +84,10 @@ TunerHidlDescrambler::~TunerHidlDescrambler() {
+ 
+ ::ndk::ScopedAStatus TunerHidlDescrambler::removePid(
+         const DemuxPid& in_pid, const shared_ptr<ITunerFilter>& in_optionalSourceFilter) {
++    if (in_optionalSourceFilter != nullptr && in_optionalSourceFilter->isRemote()) {
++        return ::ndk::ScopedAStatus::fromServiceSpecificError(
++                static_cast<int32_t>(Result::INVALID_ARGUMENT));
++    }
+     sp<HidlIFilter> halFilter =
+             (in_optionalSourceFilter == nullptr)
+                     ? nullptr
+diff --git a/services/tuner/hidl/TunerHidlDvr.cpp b/services/tuner/hidl/TunerHidlDvr.cpp
+index 285e32b24b..7009a539a1 100644
+--- a/services/tuner/hidl/TunerHidlDvr.cpp
++++ b/services/tuner/hidl/TunerHidlDvr.cpp
+@@ -79,7 +79,7 @@ TunerHidlDvr::~TunerHidlDvr() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerHidlDvr::attachFilter(const shared_ptr<ITunerFilter>& in_filter) {
+-    if (in_filter == nullptr) {
++    if (in_filter == nullptr || in_filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+@@ -98,7 +98,7 @@ TunerHidlDvr::~TunerHidlDvr() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerHidlDvr::detachFilter(const shared_ptr<ITunerFilter>& in_filter) {
+-    if (in_filter == nullptr) {
++    if (in_filter == nullptr || in_filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+diff --git a/services/tuner/hidl/TunerHidlFilter.cpp b/services/tuner/hidl/TunerHidlFilter.cpp
+index be482c4664..b28dd0a619 100644
+--- a/services/tuner/hidl/TunerHidlFilter.cpp
++++ b/services/tuner/hidl/TunerHidlFilter.cpp
+@@ -307,7 +307,7 @@ TunerHidlFilter::~TunerHidlFilter() {
+ 
+ ::ndk::ScopedAStatus TunerHidlFilter::setDataSource(const shared_ptr<ITunerFilter>& filter) {
+     Mutex::Autolock _l(mLock);
+-    if (filter == nullptr) {
++    if (filter == nullptr || filter->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+diff --git a/services/tuner/hidl/TunerHidlFrontend.cpp b/services/tuner/hidl/TunerHidlFrontend.cpp
+index 7ffb2a40c1..7d591d0fab 100644
+--- a/services/tuner/hidl/TunerHidlFrontend.cpp
++++ b/services/tuner/hidl/TunerHidlFrontend.cpp
+@@ -264,7 +264,7 @@ TunerHidlFrontend::~TunerHidlFrontend() {
+ }
+ 
+ ::ndk::ScopedAStatus TunerHidlFrontend::setLnb(const shared_ptr<ITunerLnb>& lnb) {
+-    if (lnb == nullptr) {
++    if (lnb == nullptr || lnb->isRemote()) {
+         return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                 static_cast<int32_t>(Result::INVALID_ARGUMENT));
+     }
+-- 
+2.55.0
+

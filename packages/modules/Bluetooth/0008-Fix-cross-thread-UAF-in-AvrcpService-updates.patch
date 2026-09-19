@@ -1,7 +1,7 @@
-From cc05a39cb4ff0d024d1f408ff6d789ce497243fa Mon Sep 17 00:00:00 2001
+From 70f8c173e1a58d3c10278f6390ea697dd04f8a1c Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Wed, 24 Jun 2026 15:02:03 -0700
-Subject: [PATCH 08/10] Fix cross-thread UAF in AvrcpService updates
+Subject: [PATCH 08/12] Fix cross-thread UAF in AvrcpService updates
 
 A Use-After-Free (UAF) vulnerability exists in the Android Bluetooth AVRCP service due to a cross-thread race condition. Releasing the final `shared_ptr<Device>` reference on a non-owning thread (e.g., the Java MainLooper thread) could race against a queued `WeakPtr` task executing on the `bt_main_thread` during a disconnection, leading to potential memory corruption.
 

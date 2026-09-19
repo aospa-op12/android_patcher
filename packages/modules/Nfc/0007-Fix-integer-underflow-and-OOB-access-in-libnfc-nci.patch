@@ -1,7 +1,7 @@
-From 1283cf6290d0acd4f368105c4a4891b7dddbb438 Mon Sep 17 00:00:00 2001
+From 49e2d976e06e551eeada86672fb3afba8ae7fa10 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Mon, 15 Jun 2026 05:45:55 +0000
-Subject: [PATCH 7/7] Fix integer underflow and OOB access in libnfc-nci
+Subject: [PATCH 07/13] Fix integer underflow and OOB access in libnfc-nci
 
 A compromised NFC controller sending repeated unsolicited NFCEE_DISCOVER_NTF messages can trigger an integer underflow in the `nfa_ee_cb.cur_ee` counter. This underflowed value is subsequently used as a loop bound without proper checks, leading to out-of-bounds reads and writes in the ECB array.
 

@@ -1,7 +1,7 @@
-From cf5f8090f800992b5a7a41451158c31ae971a798 Mon Sep 17 00:00:00 2001
+From e475d937442f785261a2673780cc9fe42c5f7365 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Thu, 21 May 2026 11:31:47 -0700
-Subject: [PATCH 2/2] Fix heap underflow write in ft_smooth_raster_lcd
+Subject: [PATCH 2/3] Fix heap underflow write in ft_smooth_raster_lcd
 
 This patch fixes a vulnerability in FreeType's LCD rasterizer where a
 short truncation when computing spans' x-coordinate leads to a heap

@@ -1,0 +1,36 @@
+From 76ef10c36986b30df21ed8903538b9aac9fed28a Mon Sep 17 00:00:00 2001
+From: Duy Truong <duytruong@google.com>
+Date: Wed, 27 May 2026 14:34:15 -0700
+Subject: [PATCH 49/49] Fix silence-injection policy skip in
+ VirtualAudioController
+
+Unconditionally register mAudioPlaybackDetector in startListening to ensure the deferred silence injection policy update recovers correctly. Conditionally register mAudioRecordingDetector only when configChangedCallback is provided.
+
+Bug: 515034370
+Bug: 521392631
+Test: atest VirtualAudioControllerTest
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:26bbdd921d94ef850727a699e87e702fdadeac61
+Merged-In: I2af61fc32fb2d19e68037fdb8a10a23dc4b37071
+Change-Id: I2af61fc32fb2d19e68037fdb8a10a23dc4b37071
+---
+ .../server/companion/virtual/audio/VirtualAudioController.java  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/companion/java/com/android/server/companion/virtual/audio/VirtualAudioController.java b/services/companion/java/com/android/server/companion/virtual/audio/VirtualAudioController.java
+index 92af755813fe..051a2331be69 100644
+--- a/services/companion/java/com/android/server/companion/virtual/audio/VirtualAudioController.java
++++ b/services/companion/java/com/android/server/companion/virtual/audio/VirtualAudioController.java
+@@ -102,8 +102,8 @@ public final class VirtualAudioController implements AudioPlaybackCallback, Audi
+             mRunningAppUids.clear();
+             mPlayingAppUids.clear();
+         }
++        mAudioPlaybackDetector.register(/* callback= */ this);
+         if (configChangedCallback != null) {
+-            mAudioPlaybackDetector.register(/* callback= */ this);
+             mAudioRecordingDetector.register(/* callback= */ this);
+         }
+     }
+-- 
+2.55.0
+

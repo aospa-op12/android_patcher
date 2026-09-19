@@ -1,7 +1,7 @@
-From d7741c6957ed15068ec2e05b832b26725d92b572 Mon Sep 17 00:00:00 2001
+From 4ccdb5611ac0f49895a6e14576730cba80e69ecc Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Mon, 11 May 2026 10:22:27 +0000
-Subject: [PATCH 2/7] Fix uint16 loop counter wrap in T3T NDEF CHECK/UPDATE
+Subject: [PATCH 02/13] Fix uint16 loop counter wrap in T3T NDEF CHECK/UPDATE
 
 Add check in rw_t3t_send_next_ndef_update_cmd
 and rw_t3t_send_next_ndef_check_cmd to prevent integer wrap and

@@ -1,7 +1,7 @@
-From c648b406e3860a46a428ea3f36abe929f9082e7f Mon Sep 17 00:00:00 2001
+From 37749579e4aec03de92b441274b2b1465697019b Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Mon, 4 May 2026 16:06:15 -0700
-Subject: [PATCH 20/27] Add bracket checking support to SQLiteTokenizer
+Subject: [PATCH 20/49] Add bracket checking support to SQLiteTokenizer
 
 Add OPTION_CHECK_BRACKETS to SQLiteTokenizer to allow checking for
 unbalanced brackets. This can be used to prevent SQL injection where

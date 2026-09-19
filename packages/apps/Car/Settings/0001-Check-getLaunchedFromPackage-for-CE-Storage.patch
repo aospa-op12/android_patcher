@@ -1,0 +1,38 @@
+From cbcc854aab58edf6605940230b3f884dd6fed8c2 Mon Sep 17 00:00:00 2001
+From: Alan Chen <alanschen@google.com>
+Date: Tue, 21 Apr 2026 22:08:31 +0000
+Subject: [PATCH 1/2] Check getLaunchedFromPackage for CE Storage
+
+Bug: 394083030
+Test: manual
+Flag: EXEMPT BUG_FIX
+
+(cherry picked from commit 9d675b8318c3720612d3ea948cdfed4c216d0faf)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:fe4a38f6b6864af8a4b6a102923ba3aa8734420f
+Merged-In: I981ff41990a8001e3cfeb067c3a1867b1dc6e9f5
+Change-Id: I981ff41990a8001e3cfeb067c3a1867b1dc6e9f5
+---
+ .../car/settings/security/CredentialStorageActivity.java     | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/com/android/car/settings/security/CredentialStorageActivity.java b/src/com/android/car/settings/security/CredentialStorageActivity.java
+index 29ae9d1..1b4bd2d 100644
+--- a/src/com/android/car/settings/security/CredentialStorageActivity.java
++++ b/src/com/android/car/settings/security/CredentialStorageActivity.java
+@@ -142,10 +142,11 @@ public class CredentialStorageActivity extends FragmentActivity {
+      * Check that the caller is either CertInstaller or Settings running in a profile of this user.
+      */
+     private boolean checkCallerIsCertInstallerOrSelfInProfile() {
+-        if (TextUtils.equals(CERT_INSTALLER_PKG, getCallingPackage())) {
++        String launchedFromPackage = getLaunchedFromPackage();
++        if (TextUtils.equals(CERT_INSTALLER_PKG, launchedFromPackage)) {
+             // CertInstaller is allowed to install credentials if it has the same signature as
+             // Settings package.
+-            return getPackageManager().checkSignatures(getCallingPackage(), getPackageName())
++            return getPackageManager().checkSignatures(launchedFromPackage, getPackageName())
+                     == PackageManager.SIGNATURE_MATCH;
+         }
+ 
+-- 
+2.55.0
+

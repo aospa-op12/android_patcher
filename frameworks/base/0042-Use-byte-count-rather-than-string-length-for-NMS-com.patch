@@ -1,0 +1,57 @@
+From e98c6d4a0ab40bdb48595a6dd970aa1c4059f6f9 Mon Sep 17 00:00:00 2001
+From: Duy Truong <duytruong@google.com>
+Date: Sat, 23 May 2026 01:14:32 -0700
+Subject: [PATCH 42/49] Use byte count rather than string length for NMS
+ component name check
+
+Bug: 505067993
+Test: atest NotificationManagerServiceTest
+Flag: EXEMPT BUGFIX
+(cherry picked from commit 577543980a006ea56dd3fbbb3e7e4d28bb0db4d8)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:a6fc2d471a7529428330e9fbf2de5866fd449aef
+Merged-In: Ie1bf232340770e1237f80177bb0b86eabeda3635
+Change-Id: Ie1bf232340770e1237f80177bb0b86eabeda3635
+---
+ .../notification/NotificationManagerService.java     |  2 +-
+ .../notification/NotificationManagerServiceTest.java | 12 ++++++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/notification/NotificationManagerService.java b/services/core/java/com/android/server/notification/NotificationManagerService.java
+index 94a031230d9b..c7997ff263a9 100644
+--- a/services/core/java/com/android/server/notification/NotificationManagerService.java
++++ b/services/core/java/com/android/server/notification/NotificationManagerService.java
+@@ -1232,7 +1232,7 @@ public class NotificationManagerService extends SystemService {
+             return;
+         }
+         checkNotificationListenerAccess();
+-        if (granted && listener.flattenToString().length()
++        if (granted && listener.flattenToString().getBytes().length
+                 > NotificationManager.MAX_SERVICE_COMPONENT_NAME_LENGTH) {
+             throw new IllegalArgumentException(
+                     "Component name too long: " + listener.flattenToString());
+diff --git a/services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java b/services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java
+index ccaa70c90a1e..ef0f577ee1a6 100644
+--- a/services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java
++++ b/services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java
+@@ -6998,6 +6998,18 @@ public class NotificationManagerServiceTest extends UiServiceTestCase {
+                         c, user.getIdentifier(), /* enabled= */ true, true));
+     }
+ 
++    @Test
++    public void testSetListenerAccessForUser_grantWithByteLengthTooLong_throws() {
++        UserHandle user = UserHandle.of(mContext.getUserId() + 10);
++        // "中" (U+4E2D) is 3 bytes in UTF-8. 180 characters = 540 bytes.
++        ComponentName c = new ComponentName("com.example.package",
++                com.google.common.base.Strings.repeat("\u4e2d", 180));
++
++        assertThrows(IllegalArgumentException.class,
++                () -> mBinderService.setNotificationListenerAccessGrantedForUser(
++                        c, user.getIdentifier(), /* enabled= */ true, true));
++    }
++
+     @Test
+     public void testSetListenerAccessForUser_revokeWithNameTooLong_okay() throws Exception {
+         UserHandle user = UserHandle.of(mContext.getUserId() + 10);
+-- 
+2.55.0
+

@@ -1,0 +1,317 @@
+From cc3be28e7dccafd128aa6aa1a7f61068dce545e5 Mon Sep 17 00:00:00 2001
+From: Jiaming Liu <jiamingliu@google.com>
+Date: Fri, 27 Mar 2026 04:40:17 +0000
+Subject: [PATCH 39/49] Add Task-level input sink to block cross-task tap
+ pass-through
+
+When there are TaskFragments that do not fill the entire Task, there
+could be security concerns for touches passing through the unfilled area
+in the Task and reaching the Task below. The risk could also happens in
+adjacent TaskFragments.
+Therefore, the change add a Task-level input sink to avoid the
+cross-task touch pass through.
+
+Bug: 490083213
+Test: atest WmTests:TaskInputSinkTests
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:4373cf896dce49ba35ba2351d6bb974415bf9737
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:48519a7ada6dabfe773c41d719c49d0f672f7824
+Merged-In: Icd0774a5ec642d57a06038e2635cd22ad9ab6cd6
+Change-Id: Icd0774a5ec642d57a06038e2635cd22ad9ab6cd6
+---
+ .../core/java/com/android/server/wm/Task.java | 24 +++++
+ .../com/android/server/wm/TaskInputSink.java  | 99 +++++++++++++++++++
+ .../com/android/server/wm/Transition.java     | 18 +++-
+ .../android/server/wm/TaskInputSinkTests.java | 89 +++++++++++++++++
+ 4 files changed, 226 insertions(+), 4 deletions(-)
+ create mode 100644 services/core/java/com/android/server/wm/TaskInputSink.java
+ create mode 100644 services/tests/wmtests/src/com/android/server/wm/TaskInputSinkTests.java
+
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+index 33e0d7ab223a..d25b1010c9bd 100644
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -426,6 +426,12 @@ class Task extends TaskFragment {
+     @Nullable
+     DecorSurfaceContainer mDecorSurfaceContainer;
+ 
++    // A surface that could intercept touches to avoid cross-Task passthrough. This is applied to
++    // non-organizer-created Task only and created when the first TaskFragment is added to the
++    // children of this Task.
++    @Nullable
++    TaskInputSink mTaskInputSink = null;
++
+     static final int LAYER_RANK_INVISIBLE = -1;
+     // Ranking (from top) of this task among all visible tasks. (-1 means it's not visible)
+     // This number will be assigned when we evaluate OOM scores for all visible tasks.
+@@ -1665,6 +1671,11 @@ class Task extends TaskFragment {
+         // passed from Task constructor.
+         final TaskFragment childTaskFrag = child.asTaskFragment();
+         if (childTaskFrag != null && childTaskFrag.asTask() == null) {
++            if (!mCreatedByOrganizer && mTaskInputSink == null) {
++                // The TaskInputSink is created for the Task when the first TaskFragment is added
++                // to the Task's children and the Task is not created by an organizer.
++                mTaskInputSink = new TaskInputSink(this);
++            }
+             if (childTaskFrag.mTaskFragmentOrganizerProcessName != null
+                     && mTaskFragmentHostProcessName == null) {
+                 mTaskFragmentHostUid = childTaskFrag.mTaskFragmentOrganizerUid;
+@@ -3003,6 +3014,9 @@ class Task extends TaskFragment {
+         if (mDecorSurfaceContainer != null) {
+             mDecorSurfaceContainer.release();
+         }
++        if (mTaskInputSink != null) {
++            mTaskInputSink.releaseSurfaceControl();
++        }
+ 
+         super.removeImmediately();
+         mDisplayContent = null;
+@@ -3439,6 +3453,16 @@ class Task extends TaskFragment {
+         t.setVisibility(mSurfaceControl, isVisible());
+     }
+ 
++    @Override
++    void prepareSurfaces() {
++        // Input sink surface is not a part of animation, so apply in a steady state
++        // (non-sync) with pending transaction.
++        if (mTaskInputSink != null && isVisible() && mSyncState == SYNC_STATE_NONE) {
++            mTaskInputSink.applyChangesToSurfaceIfChanged(getPendingTransaction());
++        }
++        super.prepareSurfaces();
++    }
++
+     /**
+      * Fills in a {@link TaskInfo} with information from this task. Note that the base intent in the
+      * task info will not include any extras or clip data.
+diff --git a/services/core/java/com/android/server/wm/TaskInputSink.java b/services/core/java/com/android/server/wm/TaskInputSink.java
+new file mode 100644
+index 000000000000..1fdbb4ecda54
+--- /dev/null
++++ b/services/core/java/com/android/server/wm/TaskInputSink.java
+@@ -0,0 +1,99 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.wm;
++
++import android.os.InputConfig;
++import android.view.InputWindowHandle;
++import android.view.SurfaceControl;
++import android.view.WindowManager;
++
++/**
++ * Creates a InputWindowHandle that catches all touches that would otherwise pass through a
++ * Task.
++ */
++class TaskInputSink {
++
++    private final Task mTask;
++    private final String mName;
++
++    private InputWindowHandleWrapper mInputWindowHandleWrapper;
++    private SurfaceControl mSurfaceControl;
++
++    TaskInputSink(Task task) {
++        mTask = task;
++        mName = Integer.toHexString(System.identityHashCode(this)) + " TaskInputSink "
++                + mTask.mTaskId;
++    }
++
++    void applyChangesToSurfaceIfChanged(SurfaceControl.Transaction transaction) {
++        InputWindowHandleWrapper inputWindowHandleWrapper = getInputWindowHandleWrapper();
++        if (mSurfaceControl == null) {
++            mSurfaceControl = createSurface(transaction);
++        }
++        if (inputWindowHandleWrapper.isChanged()) {
++            inputWindowHandleWrapper.applyChangesToSurface(transaction, mSurfaceControl);
++        }
++    }
++
++    private SurfaceControl createSurface(SurfaceControl.Transaction t) {
++        SurfaceControl surfaceControl = mTask.makeChildSurface(null)
++                .setName(mName)
++                .setHidden(false)
++                .setCallsite("TaskInputSink.createSurface")
++                .build();
++        // Put layer below all siblings (and the parent surface too)
++        t.setLayer(surfaceControl, Integer.MIN_VALUE);
++        return surfaceControl;
++    }
++
++    private InputWindowHandleWrapper getInputWindowHandleWrapper() {
++        if (mInputWindowHandleWrapper == null) {
++            mInputWindowHandleWrapper = new InputWindowHandleWrapper(createInputWindowHandle());
++        }
++        if (mTask.inTransition() || !mTask.isLeafTask()) {
++            // Set to non-touchable, so the touch events can pass through.
++            mInputWindowHandleWrapper.setInputConfigMasked(
++                    InputConfig.NOT_TOUCHABLE, InputConfig.NOT_TOUCHABLE);
++        } else {
++            // Set to touchable, so it can block by intercepting the touch events.
++            mInputWindowHandleWrapper.setInputConfigMasked(
++                    InputConfig.DEFAULT, InputConfig.NOT_TOUCHABLE);
++        }
++        mInputWindowHandleWrapper.setDisplayId(mTask.getDisplayId());
++        return mInputWindowHandleWrapper;
++    }
++
++    private InputWindowHandle createInputWindowHandle() {
++        InputWindowHandle inputWindowHandle = new InputWindowHandle(null,
++                mTask.getDisplayId());
++        inputWindowHandle.replaceTouchableRegionWithCrop = true;
++        inputWindowHandle.name = mName;
++        inputWindowHandle.layoutParamsType = WindowManager.LayoutParams.TYPE_INPUT_CONSUMER;
++        inputWindowHandle.ownerPid = WindowManagerService.MY_PID;
++        inputWindowHandle.ownerUid = WindowManagerService.MY_UID;
++        inputWindowHandle.inputConfig = InputConfig.NOT_FOCUSABLE | InputConfig.NO_INPUT_CHANNEL;
++        return inputWindowHandle;
++    }
++
++    void releaseSurfaceControl() {
++        if (mSurfaceControl != null) {
++            mSurfaceControl.release();
++            mSurfaceControl = null;
++        }
++    }
++
++}
+diff --git a/services/core/java/com/android/server/wm/Transition.java b/services/core/java/com/android/server/wm/Transition.java
+index ae39b4d9779f..6470d4aff835 100644
+--- a/services/core/java/com/android/server/wm/Transition.java
++++ b/services/core/java/com/android/server/wm/Transition.java
+@@ -1764,10 +1764,20 @@ class Transition implements BLASTSyncEngine.TransactionReadyListener {
+         // Update the input-sink (touch-blocking) state now that the animation is finished.
+         boolean scheduleAnimation = false;
+         for (int i = 0; i < mParticipants.size(); ++i) {
+-            final ActivityRecord ar = mParticipants.valueAt(i).asActivityRecord();
+-            if (ar == null || !ar.isVisible() || ar.getParent() == null) continue;
+-            scheduleAnimation = true;
+-            ar.mActivityRecordInputSink.applyChangesToSurfaceIfChanged(ar.getPendingTransaction());
++            final WindowContainer wc = mParticipants.valueAt(i);
++            final ActivityRecord ar = wc.asActivityRecord();
++            if (ar != null && ar.isVisible() && ar.getParent() != null) {
++                scheduleAnimation = true;
++                ar.mActivityRecordInputSink.applyChangesToSurfaceIfChanged(
++                        ar.getPendingTransaction());
++            }
++            final Task task = wc.asTask();
++            if (task != null && task.isVisible() && task.getParent() != null
++                    && task.mTaskInputSink != null) {
++                scheduleAnimation = true;
++                task.mTaskInputSink.applyChangesToSurfaceIfChanged(
++                        task.getPendingTransaction());
++            }
+         }
+         // To apply pending transactions.
+         if (scheduleAnimation) mWmService.scheduleAnimationLocked();
+diff --git a/services/tests/wmtests/src/com/android/server/wm/TaskInputSinkTests.java b/services/tests/wmtests/src/com/android/server/wm/TaskInputSinkTests.java
+new file mode 100644
+index 000000000000..fd43549cdfce
+--- /dev/null
++++ b/services/tests/wmtests/src/com/android/server/wm/TaskInputSinkTests.java
+@@ -0,0 +1,89 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.wm;
++
++import static com.google.common.truth.Truth.assertThat;
++
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.spy;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++import android.os.InputConfig;
++import android.platform.test.annotations.Presubmit;
++import android.view.InputWindowHandle;
++import android.view.SurfaceControl;
++
++import androidx.test.filters.SmallTest;
++
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.ArgumentCaptor;
++import org.mockito.Mockito;
++
++/**
++ * Test class for {@link TaskInputSink}.
++ *
++ * Build/Install/Run:
++ * atest WmTests:TaskInputSinkTests
++ */
++@SmallTest
++@Presubmit
++@RunWith(WindowTestRunner.class)
++public class TaskInputSinkTests extends WindowTestsBase {
++
++    private Task mTaskSpy;
++    private TaskInputSink mTaskInputSinkSpy;
++
++    @Before
++    public void setUp() throws Exception {
++        mTaskSpy = spy(createTask(mDisplayContent));
++        mTaskInputSinkSpy = spy(new TaskInputSink(mTaskSpy));
++    }
++
++    @Test
++    public void testApplyChangesToSurface_inTransition_allowPassthrough() {
++        final SurfaceControl.Transaction t = mTaskSpy.getPendingTransaction();
++        when(mTaskSpy.inTransition()).thenReturn(true);
++
++        Mockito.reset(t);
++        mTaskInputSinkSpy.applyChangesToSurfaceIfChanged(t);
++        ArgumentCaptor<InputWindowHandle> inputWindowHandleArgumentCaptor =
++                ArgumentCaptor.forClass(InputWindowHandle.class);
++        verify(t).setInputWindowInfo(any(), inputWindowHandleArgumentCaptor.capture());
++
++        int inputConfig = inputWindowHandleArgumentCaptor.getValue().inputConfig;
++        assertThat(inputConfig & InputConfig.NOT_TOUCHABLE)
++                .isEqualTo(InputConfig.NOT_TOUCHABLE);
++    }
++
++    @Test
++    public void testApplyChangesToSurface_notInTransition_disallowPassthrough() {
++        final SurfaceControl.Transaction t = mTaskSpy.getPendingTransaction();
++        when(mTaskSpy.inTransition()).thenReturn(false);
++
++        Mockito.reset(t);
++        mTaskInputSinkSpy.applyChangesToSurfaceIfChanged(t);
++        ArgumentCaptor<InputWindowHandle> inputWindowHandleArgumentCaptor =
++                ArgumentCaptor.forClass(InputWindowHandle.class);
++        verify(t).setInputWindowInfo(any(), inputWindowHandleArgumentCaptor.capture());
++
++        int inputConfig = inputWindowHandleArgumentCaptor.getValue().inputConfig;
++        assertThat(inputConfig & InputConfig.NOT_TOUCHABLE).isEqualTo(InputConfig.DEFAULT);
++    }
++}
+-- 
+2.55.0
+

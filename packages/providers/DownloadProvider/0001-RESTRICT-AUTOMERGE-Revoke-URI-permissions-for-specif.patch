@@ -1,0 +1,83 @@
+From bb7d634ef15066793c2451c4d9fe7dd0b2874a0c Mon Sep 17 00:00:00 2001
+From: Himanshu Arora <hmarora@google.com>
+Date: Sun, 15 Mar 2026 14:39:37 +0000
+Subject: [PATCH 1/4] RESTRICT AUTOMERGE Revoke URI permissions for specific
+ document paths
+
+Implement a mechanism to revoke URI permissions for a document given its file path via DownloadProvider's call method
+
+Bug: 463362836
+Test: manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:06b8e9215cd53c2546d3de8740d9d0746f9cf8a2
+Merged-In: Id983aa42236b7146276b80f0f4072a8d8bec365f
+Change-Id: Id983aa42236b7146276b80f0f4072a8d8bec365f
+---
+ .../providers/downloads/DownloadProvider.java | 24 +++++++++++++++++++
+ .../downloads/DownloadStorageProvider.java    |  8 +++++++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/src/com/android/providers/downloads/DownloadProvider.java b/src/com/android/providers/downloads/DownloadProvider.java
+index f3f3bc3..931a25a 100644
+--- a/src/com/android/providers/downloads/DownloadProvider.java
++++ b/src/com/android/providers/downloads/DownloadProvider.java
+@@ -261,6 +261,9 @@ public final class DownloadProvider extends ContentProvider {
+     private StorageManager mStorageManager;
+     private AppOpsManager mAppOpsManager;
+ 
++    private static final String REVOKE_URI_PERMISSION_CALL = "revoke_uri_permission";
++    private static final String EXTRA_OLD_PATH = "old_path";
++
+     /**
+      * Creates and updated database on demand when opening it.
+      * Helper class to create database the first time the provider is
+@@ -696,6 +699,27 @@ public final class DownloadProvider extends ContentProvider {
+                 }
+                 return null;
+             }
++            case REVOKE_URI_PERMISSION_CALL: {
++                getContext().enforceCallingOrSelfPermission(
++                        android.Manifest.permission.WRITE_MEDIA_STORAGE, Constants.TAG);
++
++                if (extras == null) {
++                    throw new IllegalArgumentException("extras cannot be null");
++                }
++
++                final String oldPath = extras.getString(EXTRA_OLD_PATH);
++                if (oldPath == null) {
++                    throw new IllegalArgumentException("old path cannot be null");
++                }
++
++                final long token = Binder.clearCallingIdentity();
++                try {
++                    DownloadStorageProvider.revokeDocumentByPath(getContext(), oldPath);
++                } finally {
++                    Binder.restoreCallingIdentity(token);
++                }
++                return null;
++            }
+             case Downloads.CALL_REVOKE_MEDIASTORE_URI_PERMS : {
+                 getContext().enforceCallingOrSelfPermission(
+                         android.Manifest.permission.WRITE_MEDIA_STORAGE, Constants.TAG);
+diff --git a/src/com/android/providers/downloads/DownloadStorageProvider.java b/src/com/android/providers/downloads/DownloadStorageProvider.java
+index b8e6eb2..e36d23a 100644
+--- a/src/com/android/providers/downloads/DownloadStorageProvider.java
++++ b/src/com/android/providers/downloads/DownloadStorageProvider.java
+@@ -142,6 +142,14 @@ public class DownloadStorageProvider extends FileSystemProvider {
+         }
+     }
+ 
++    static void revokeDocumentByPath(Context context, String oldPath) {
++        final String docId = RawDocumentsHelper.getDocIdForFile(new File(oldPath));
++        final Uri uri = DocumentsContract.buildDocumentUri(AUTHORITY, docId);
++        final Uri treeUri = DocumentsContract.buildTreeDocumentUri(AUTHORITY, docId);
++        context.revokeUriPermission(uri, ~0);
++        context.revokeUriPermission(treeUri, ~0);
++    }
++
+     static void revokeAllMediaStoreUriPermissions(Context context) {
+         final List<UriPermission> uriPermissions =
+                 context.getContentResolver().getOutgoingUriPermissions();
+-- 
+2.55.0
+

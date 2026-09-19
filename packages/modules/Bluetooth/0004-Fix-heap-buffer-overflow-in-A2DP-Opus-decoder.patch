@@ -1,7 +1,7 @@
-From 1f1a6824bc8991e2d0c42ed4ec6ebba30207a2a1 Mon Sep 17 00:00:00 2001
+From 9baded07fda815431c817b3b371530c168558c45 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 26 May 2026 11:27:42 -0700
-Subject: [PATCH 04/10] Fix heap buffer overflow in A2DP Opus decoder
+Subject: [PATCH 04/12] Fix heap buffer overflow in A2DP Opus decoder
 
 The A2DP Opus decoder passes the buffer size in bytes to opus_decode()
 where it expects samples-per-channel. This allows a crafted Opus

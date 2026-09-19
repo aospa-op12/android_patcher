@@ -1,7 +1,7 @@
-From 6f753bd5346c0f03c7c2fdbb48377507615b7f5d Mon Sep 17 00:00:00 2001
+From e44da722baad8bae5ce42b2245c157092c0d34b2 Mon Sep 17 00:00:00 2001
 From: Jared Duke <jdduke@google.com>
 Date: Tue, 14 Apr 2026 01:18:50 +0000
-Subject: [PATCH 01/27] Use consistent mmap/unmap sizes in MemoryIntArray
+Subject: [PATCH 01/49] Use consistent mmap/unmap sizes in MemoryIntArray
 
 Ensure mmap/munmap pairings for MemoryIntArray always use the same size
 argument, rather than re-querying the ashmem size region before unmap.

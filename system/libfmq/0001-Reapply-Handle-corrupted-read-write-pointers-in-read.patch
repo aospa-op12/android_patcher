@@ -1,0 +1,74 @@
+From fd7c120fca969737d9a87fdedcfae6bc268b7204 Mon Sep 17 00:00:00 2001
+From: Devin Moore <devinmoore@google.com>
+Date: Fri, 12 Jun 2026 16:10:39 +0000
+Subject: [PATCH] Reapply "Handle corrupted read/write pointers in read
+ funcitons"
+
+This reverts commit 11165074cdd90594e1935ee2b9edceb822a2957f.
+
+Fixed beginRead() check to only apply to kSynchronizedReadWrite flavors.
+The other unsync flavor is expected to have overflows when the readers
+are too slow to keep with the writer.
+
+Also added tests for beginRead() specifically and tests for the unsync
+overflow behavior.
+
+Test: atest fmq_unit_tests
+Bug: 504768739
+Bug: 514861024
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:c4412ddafd204b5acbf2fbbdafe3ce694bc0a364
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:d4ebcba36d271ea456188a258eee9a0bb59f2fb1
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:92cf2be8cb402c8c324eed46d20bddc4bee6bb58
+Merged-In: Icd31feb0855c7d64bd68f7d0a8da690c75341b76
+Change-Id: Icd31feb0855c7d64bd68f7d0a8da690c75341b76
+---
+ include/fmq/MessageQueueBase.h | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/include/fmq/MessageQueueBase.h b/include/fmq/MessageQueueBase.h
+index 19de97c..b51d60d 100644
+--- a/include/fmq/MessageQueueBase.h
++++ b/include/fmq/MessageQueueBase.h
+@@ -1370,18 +1370,22 @@ size_t MessageQueueBase<MQDescriptorType, T, flavor>::availableToReadBytes() con
+      */
+     uint64_t writePtr = mWritePtr->load(std::memory_order_acquire);
+     uint64_t readPtr = mReadPtr->load(std::memory_order_acquire);
+-    if (writePtr < readPtr) {
++    size_t queueSizeBytes = mDesc->getSize();
++    size_t availableBytes = (writePtr >= readPtr) ? writePtr - readPtr : SIZE_MAX;
++    if (writePtr < readPtr ||
++        (flavor == kSynchronizedReadWrite && availableBytes > queueSizeBytes)) {
+         std::string errorMsg =
+                 "The write or read pointer has become corrupted. Reading from the queue is no "
+                 "longer possible. Write pointer: " +
+-                std::to_string(writePtr) + ", read pointer: " + std::to_string(readPtr);
++                std::to_string(writePtr) + ", read pointer: " + std::to_string(readPtr) +
++                ", queue size: " + std::to_string(queueSizeBytes);
+         hardware::details::logError(errorMsg);
+         if (mErrorHandler) {
+             mErrorHandler(Error::POINTER_CORRUPTION, std::move(errorMsg));
+         }
+         return 0;
+     }
+-    return writePtr - readPtr;
++    return availableBytes;
+ }
+ 
+ template <template <typename, MQFlavor> typename MQDescriptorType, typename T, MQFlavor flavor>
+@@ -1506,6 +1510,12 @@ template <template <typename, MQFlavor> typename MQDescriptorType, typename T, M
+ __attribute__((no_sanitize("integer"))) bool
+ MessageQueueBase<MQDescriptorType, T, flavor>::beginRead(size_t nMessages,
+                                                          MemTransaction* result) const {
++    if (flavor == kSynchronizedReadWrite && nMessages > getQuantumCount()) {
++        hardware::details::logError("Attempting to read " + std::to_string(nMessages) +
++                                    " from a queue that is only set up for " +
++                                    std::to_string(getQuantumCount()));
++        return false;
++    }
+     *result = MemTransaction();
+     /*
+      * If it is detected that the data in the queue was overwritten
+-- 
+2.55.0
+

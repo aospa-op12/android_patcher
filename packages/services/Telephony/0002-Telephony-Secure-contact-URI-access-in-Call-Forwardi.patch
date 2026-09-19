@@ -1,0 +1,285 @@
+From 4e77500e91ec3de46f31cb6aeb2a012aae42508e Mon Sep 17 00:00:00 2001
+From: Steve Statia <stevestatia@google.com>
+Date: Wed, 6 May 2026 23:13:42 +0000
+Subject: [PATCH 2/3] [Telephony] Secure contact URI access in Call Forwarding
+
+Enforce caller permission checks on the contact URIs returned by the
+contact picker in CdmaCallForwardOptions and GsmUmtsCallForwardOptions.
+
+A malicious third-party application acting as a contact picker could
+return a specially crafted Enterprise URI (e.g., pointing to a protected
+work profile contact) that it does not have permission to access. Due to
+insufficient verification, the Phone app would query and display this
+contact, leading to a cross-profile data leak (Confused Deputy).
+
+This change:
+- Validates that the calling application has explicit read permission to
+  the returned contact URI using ComponentCaller.
+- Adds defensive null checks for the contact URI after retrieval to
+  prevent NullPointerExceptions in ContentResolver.query.
+
+Bug: 490916793
+Test: atest TeleServiceRoboTests:ContactPermissionUtilsTest
+Flag: EXEMPT BUGFIX
+(cherry picked from commit c640414ba5ec8279ec48ae1093baa3be5878d6bc)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:ab08c74efefb3aabfc7d799f323b42b5ba94e048
+Merged-In: Ib0ad34bffb9cb12e186ed8a0e605d11ae185e817
+Change-Id: Ib0ad34bffb9cb12e186ed8a0e605d11ae185e817
+---
+ .../android/phone/CdmaCallForwardOptions.java |  14 +++
+ .../android/phone/ContactPermissionUtils.java |  60 ++++++++++
+ .../phone/GsmUmtsCallForwardOptions.java      |  14 +++
+ .../phone/ContactPermissionUtilsTest.java     | 110 ++++++++++++++++++
+ 4 files changed, 198 insertions(+)
+ create mode 100644 src/com/android/phone/ContactPermissionUtils.java
+ create mode 100644 tests/robotests/src/com/android/phone/ContactPermissionUtilsTest.java
+
+diff --git a/src/com/android/phone/CdmaCallForwardOptions.java b/src/com/android/phone/CdmaCallForwardOptions.java
+index 1643fea..c8a415b 100644
+--- a/src/com/android/phone/CdmaCallForwardOptions.java
++++ b/src/com/android/phone/CdmaCallForwardOptions.java
+@@ -20,6 +20,7 @@ import android.app.ActionBar;
+ import android.content.ContentProvider;
+ import android.content.Intent;
+ import android.database.Cursor;
++import android.net.Uri;
+ import android.os.Bundle;
+ import android.os.PersistableBundle;
+ import android.os.Process;
+@@ -229,6 +230,19 @@ public class CdmaCallForwardOptions extends TimeConsumingPreferenceActivity {
+             Log.d(LOG_TAG, "onActivityResult: contact picker result not OK.");
+             return;
+         }
++
++        if (data == null) {
++            Log.w(LOG_TAG, "onActivityResult: data is null");
++            return;
++        }
++
++        Uri contactUri = data.getData();
++        if (contactUri == null) {
++            Log.w(LOG_TAG, "onActivityResult: contactUri is null");
++            return;
++        }
++        ContactPermissionUtils.checkContactUriPermission(getCurrentCaller(), contactUri);
++
+         Cursor cursor = null;
+         try {
+             // check if the URI returned by the user belongs to the user
+diff --git a/src/com/android/phone/ContactPermissionUtils.java b/src/com/android/phone/ContactPermissionUtils.java
+new file mode 100644
+index 0000000..073427d
+--- /dev/null
++++ b/src/com/android/phone/ContactPermissionUtils.java
+@@ -0,0 +1,60 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.phone;
++
++import android.app.ComponentCaller;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.net.Uri;
++import android.util.Log;
++
++/**
++ * Utility class for contact permission checks.
++ */
++public class ContactPermissionUtils {
++    private static final String LOG_TAG = "ContactPermissionUtils";
++
++    private ContactPermissionUtils() {
++        // Prevents instantiation
++    }
++
++    /**
++     * Validates that the caller has permission to access the returned contact URI.
++     * Throws SecurityException if permission is denied.
++     */
++    public static void checkContactUriPermission(ComponentCaller caller, Uri uri) {
++        if (caller == null) {
++            throw new SecurityException("Permission denial: Current caller is null.");
++        }
++        if (uri == null) {
++            Log.w(LOG_TAG, "checkContactUriPermission: Contact URI is null.");
++            return;
++        }
++
++        if (caller.checkContentUriPermission(uri,
++                Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_DENIED) {
++            throw new SecurityException(String.format(
++                    "Permission denial: Caller (uid=%d, pkg=%s) lacks specific permission"
++                            + " grant %s to access contact URI %s.",
++                    caller.getUid(),
++                    caller.getPackage(),
++                    "FLAG_GRANT_READ_URI_PERMISSION",
++                    uri
++            ));
++        }
++    }
++}
+diff --git a/src/com/android/phone/GsmUmtsCallForwardOptions.java b/src/com/android/phone/GsmUmtsCallForwardOptions.java
+index d24a054..8a1ccff 100644
+--- a/src/com/android/phone/GsmUmtsCallForwardOptions.java
++++ b/src/com/android/phone/GsmUmtsCallForwardOptions.java
+@@ -28,6 +28,7 @@ import android.content.Intent;
+ import android.content.IntentFilter;
+ // QTI_END: 2018-04-09: Telephony: IMS: Add data check for UT supplementary service of CallForwarding
+ import android.database.Cursor;
++import android.net.Uri;
+ // QTI_BEGIN: 2018-04-09: Telephony: IMS: Add data check for UT supplementary service of CallForwarding
+ import android.net.ConnectivityManager;
+ // QTI_END: 2018-04-09: Telephony: IMS: Add data check for UT supplementary service of CallForwarding
+@@ -722,6 +723,19 @@ public class GsmUmtsCallForwardOptions extends TimeConsumingPreferenceActivity
+             Log.d(LOG_TAG, "onActivityResult: contact picker result not OK.");
+             return;
+         }
++
++        if (data == null) {
++            Log.w(LOG_TAG, "onActivityResult: data is null");
++            return;
++        }
++
++        Uri contactUri = data.getData();
++        if (contactUri == null) {
++            Log.w(LOG_TAG, "onActivityResult: contactUri is null");
++            return;
++        }
++        ContactPermissionUtils.checkContactUriPermission(getCurrentCaller(), contactUri);
++
+         Cursor cursor = null;
+         try {
+             // check if the URI returned by the user belongs to the user
+diff --git a/tests/robotests/src/com/android/phone/ContactPermissionUtilsTest.java b/tests/robotests/src/com/android/phone/ContactPermissionUtilsTest.java
+new file mode 100644
+index 0000000..e39b9d2
+--- /dev/null
++++ b/tests/robotests/src/com/android/phone/ContactPermissionUtilsTest.java
+@@ -0,0 +1,110 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.phone;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.fail;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++import android.app.ComponentCaller;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.net.Uri;
++
++import androidx.test.ext.junit.runners.AndroidJUnit4;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.Mock;
++import org.mockito.MockitoAnnotations;
++
++@RunWith(AndroidJUnit4.class)
++public class ContactPermissionUtilsTest {
++
++    @Mock
++    private ComponentCaller mMockCaller;
++
++    private Uri mTestUri = Uri.parse("content://contacts/people/1");
++
++    private AutoCloseable mMockitoSession;
++
++    @Before
++    public void setUp() throws Exception {
++        mMockitoSession = MockitoAnnotations.openMocks(this);
++        when(mMockCaller.getUid()).thenReturn(1000);
++        when(mMockCaller.getPackage()).thenReturn("com.example.app");
++    }
++
++    @After
++    public void tearDown() throws Exception {
++        if (mMockitoSession != null) {
++            mMockitoSession.close();
++        }
++    }
++
++    @Test
++    public void testCheckContactUriPermission_nullCaller_throwsSecurityException() {
++        try {
++            ContactPermissionUtils.checkContactUriPermission(null, mTestUri);
++            fail("SecurityException expected when caller is null");
++        } catch (SecurityException e) {
++            assertEquals("Permission denial: Current caller is null.", e.getMessage());
++        }
++    }
++
++    @Test
++    public void testCheckContactUriPermission_nullUri_returnsNormally() {
++        ContactPermissionUtils.checkContactUriPermission(mMockCaller, null);
++        // Should not throw exception
++    }
++
++    @Test
++    public void testCheckContactUriPermission_permissionGranted_returnsNormally() {
++        when(mMockCaller.checkContentUriPermission(mTestUri,
++                Intent.FLAG_GRANT_READ_URI_PERMISSION))
++                .thenReturn(PackageManager.PERMISSION_GRANTED);
++
++        ContactPermissionUtils.checkContactUriPermission(mMockCaller, mTestUri);
++    }
++
++    @Test
++    public void testCheckContactUriPermission_permissionDenied_throwsSecurityException() {
++        when(mMockCaller.checkContentUriPermission(mTestUri,
++                Intent.FLAG_GRANT_READ_URI_PERMISSION))
++                .thenReturn(PackageManager.PERMISSION_DENIED);
++
++        try {
++            ContactPermissionUtils.checkContactUriPermission(mMockCaller, mTestUri);
++            fail("SecurityException expected when permission denied");
++        } catch (SecurityException e) {
++            String expectedMessage = String.format(
++                    "Permission denial: Caller (uid=%d, pkg=%s) lacks specific permission"
++                            + " grant %s to access contact URI %s.",
++                    1000,
++                    "com.example.app",
++                    "FLAG_GRANT_READ_URI_PERMISSION",
++                    mTestUri
++            );
++            assertEquals(expectedMessage, e.getMessage());
++            verify(mMockCaller).checkContentUriPermission(mTestUri,
++                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
++        }
++    }
++}
+-- 
+2.55.0
+

@@ -1,0 +1,87 @@
+From bb25b6bf9a02ec3f11558e98c78e2fa49a4ebed0 Mon Sep 17 00:00:00 2001
+From: Himanshu Arora <hmarora@google.com>
+Date: Sun, 15 Mar 2026 14:49:12 +0000
+Subject: [PATCH 30/49] RESTRICT AUTOMERGE [ExternalStorageProvider] Revoke URI
+ permissions by path
+
+Add support for revoking URI permissions associated with a specific file path. This is handled via a new revoke_uri_permission call that resolves the path to a document URI and revokes all its permissions.
+
+Bug: 463362836
+Test: manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:6bb9433bf162079b505cc0ff2597d61250617e01
+Merged-In: I8044d75b7e58555e4e11546b30304a0bfbbda95e
+Change-Id: I8044d75b7e58555e4e11546b30304a0bfbbda95e
+---
+ .../ExternalStorageProvider.java              | 41 +++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java b/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
+index 2fac7a6c65fc..93c08e89693e 100644
+--- a/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
++++ b/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java
+@@ -149,6 +149,9 @@ public class ExternalStorageProvider extends FileSystemProvider {
+ 
+     private static final String GET_DOCUMENT_URI_CALL = "get_document_uri";
+     private static final String GET_MEDIA_URI_CALL = "get_media_uri";
++    private static final String REVOKE_URI_PERMISSION_CALL = "revoke_uri_permission";
++    private static final String EXTRA_OLD_PATH = "old_path";
++
+ 
+     private StorageManager mStorageManager;
+     private UserManager mUserManager;
+@@ -968,6 +971,23 @@ public class ExternalStorageProvider extends FileSystemProvider {
+                         throw new IllegalStateException(e);
+                     }
+                 }
++                case REVOKE_URI_PERMISSION_CALL:
++                    // All callers must go through MediaProvider
++                    getContext().enforceCallingPermission(
++                            android.Manifest.permission.WRITE_MEDIA_STORAGE, TAG);
++
++                    if (extras == null) {
++                        throw new IllegalArgumentException(
++                                "extras cannot be null for revoke_uri_permission");
++                    }
++
++                    final String oldPath = extras.getString(EXTRA_OLD_PATH);
++                    if (TextUtils.isEmpty(oldPath)) {
++                        throw new IllegalArgumentException(
++                                "oldPath cannot be null or empty for revoke_uri_permission");
++                    }
++                    revokeDocumentByPath(oldPath);
++                    break;
+                 default:
+                     Log.w(TAG, "unknown method passed to call(): " + method);
+             }
+@@ -975,6 +995,27 @@ public class ExternalStorageProvider extends FileSystemProvider {
+         return bundle;
+     }
+ 
++    private void revokeDocumentByPath(String oldPath) {
++        final File file = new File(oldPath);
++        final String docId;
++        try {
++            docId = getDocIdForFile(file);
++        } catch (FileNotFoundException e) {
++            Log.w(TAG, "Failed to get docId for path " + oldPath + " during revoke", e);
++            return;
++        }
++
++        final Uri uri = DocumentsContract.buildDocumentUri(AUTHORITY, docId);
++        final Uri treeUri = DocumentsContract.buildTreeDocumentUri(AUTHORITY, docId);
++        final long token = Binder.clearCallingIdentity();
++        try {
++            getContext().revokeUriPermission(uri, ~0);
++            getContext().revokeUriPermission(treeUri, ~0);
++        } finally {
++            Binder.restoreCallingIdentity(token);
++        }
++    }
++
+     private static boolean equalIgnoringCase(@NonNull String a, @NonNull String b) {
+         return TextUtils.equals(a.toLowerCase(Locale.ROOT), b.toLowerCase(Locale.ROOT));
+     }
+-- 
+2.55.0
+

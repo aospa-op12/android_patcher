@@ -1,7 +1,7 @@
-From 7927e76d5ccb1190f7328574b0dfd92e7354ec6a Mon Sep 17 00:00:00 2001
+From da2b7ee0b94b17dc3610415364b9a11a2f5b12d4 Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Mon, 11 May 2026 05:36:32 -0700
-Subject: [PATCH 1/7] Terminate MFC NDEF read on length inflation attempt
+Subject: [PATCH 01/13] Terminate MFC NDEF read on length inflation attempt
 
 Prevent heap out-of-bounds write by explicitly marking the operation as
 failed.

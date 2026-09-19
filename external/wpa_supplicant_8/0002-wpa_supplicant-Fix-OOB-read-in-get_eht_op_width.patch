@@ -1,7 +1,7 @@
-From 8511510f2e57596c20c2d61a315bc00f0bae3f7f Mon Sep 17 00:00:00 2001
+From e477c789a469341ca96f921a6fb5334799a12e74 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Thu, 30 Apr 2026 12:29:05 -0700
-Subject: [PATCH 2/2] wpa_supplicant: Fix OOB read in get_eht_op_width
+Subject: [PATCH 2/4] wpa_supplicant: Fix OOB read in get_eht_op_width
 
 EHT_OPERATION_ELEM_MIN_LEN was incorrectly defined as 1, which
 predated the addition of basic_eht_mcs_nss_set[4] to the

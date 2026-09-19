@@ -1,7 +1,7 @@
-From edc241004221fda6a5fc2c916a89ea1fb123cd6d Mon Sep 17 00:00:00 2001
+From 65d0771edf46f9eaa7613177fc0bd8dffce9e3e1 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Fri, 22 May 2026 03:54:21 -0700
-Subject: [PATCH 3/3] Fix OOB in DynamicsProcessing MBC band processing
+Subject: [PATCH 3/8] Fix OOB in DynamicsProcessing MBC band processing
 
 Clamp cutoffFrequency and add bounds checks in MBC loops
 to prevent heap out-of-bounds read-modify-write.

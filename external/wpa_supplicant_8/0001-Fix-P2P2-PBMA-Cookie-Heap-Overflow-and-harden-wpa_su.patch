@@ -1,7 +1,7 @@
-From 774b50993160564dff83a12476e4ba8bc77f1484 Mon Sep 17 00:00:00 2001
+From 87361a900eea3c280edf97beea6715f566af8892 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Thu, 7 May 2026 19:31:28 -0700
-Subject: [PATCH 1/2] Fix P2P2 PBMA Cookie Heap Overflow and harden
+Subject: [PATCH 1/4] Fix P2P2 PBMA Cookie Heap Overflow and harden
  wpa_supplicant/hostapd
 
 A malicious WiFi Direct peer can overflow the heap of wpa_supplicant by responding to a P2P2 bootstrap Provision Discovery Request with an oversized cookie length in the PBMA attribute. This change adds a bounds check for the cookie length.

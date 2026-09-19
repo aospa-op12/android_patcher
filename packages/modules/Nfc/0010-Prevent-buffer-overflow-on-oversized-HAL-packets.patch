@@ -1,0 +1,49 @@
+From 6c278e3980f22d7a71188bae4b05b040c36dd109 Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Mon, 11 May 2026 05:59:34 -0700
+Subject: [PATCH 10/13] Prevent buffer overflow on oversized HAL packets
+
+Add a check in nfc_main_hal_read_cback to ensure that the incoming HAL data length does not exceed the capacity of the GKI buffer pool (NFC_NCI_POOL_ID). If an oversized packet is received, log an error and drop the packet to avoid potential buffer overflows.
+
+Bug: 508389591
+Test: Manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:f58169d22b82357e23cf61d71a578dbb9d99d2ad
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:957c620d6df7f57f58687d9251d2cdf58f55e5b1
+Merged-In: Iafa5cb7b7cf4ff6867e1609febd60ff077e65fda
+Change-Id: Iafa5cb7b7cf4ff6867e1609febd60ff077e65fda
+---
+ libnfc-nci/src/nfc/nfc/nfc_main.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/libnfc-nci/src/nfc/nfc/nfc_main.cc b/libnfc-nci/src/nfc/nfc/nfc_main.cc
+index 36a6de2..779e9bd 100644
+--- a/libnfc-nci/src/nfc/nfc/nfc_main.cc
++++ b/libnfc-nci/src/nfc/nfc/nfc_main.cc
+@@ -26,6 +26,7 @@
+ #include <android-base/logging.h>
+ #include <android-base/stringprintf.h>
+ #include <android/hardware/nfc/1.1/types.h>
++#include <log/log.h>
+ #include <string.h>
+ 
+ #include "bt_types.h"
+@@ -674,6 +675,15 @@ static void nfc_main_hal_data_cback(uint16_t data_len, uint8_t* p_data) {
+     p_msg = (NFC_HDR*)GKI_getbuf(sizeof(NFC_HDR) + NFC_RECEIVE_MSGS_OFFSET +
+                                  data_len);
+ #else
++    uint16_t max_len = GKI_get_pool_bufsize(NFC_NCI_POOL_ID) - sizeof(NFC_HDR) -
++                       NFC_RECEIVE_MSGS_OFFSET;
++    if (data_len > max_len) {
++      LOG(ERROR) << StringPrintf(
++          "%s: dropping oversized HAL packet (%u bytes > %u capacity)",
++          __func__, data_len, max_len);
++      android_errorWriteLog(0x534e4554, "508389591");
++      return;
++    }
+     p_msg = (NFC_HDR*)GKI_getpoolbuf(NFC_NCI_POOL_ID);
+ #endif
+     if (p_msg != nullptr) {
+-- 
+2.55.0
+

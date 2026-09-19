@@ -1,0 +1,49 @@
+From a3ba0e59bb320f871ccec5ac8a972e9266e2139c Mon Sep 17 00:00:00 2001
+From: Duy Truong <duytruong@google.com>
+Date: Sun, 10 May 2026 15:42:57 -0700
+Subject: [PATCH 4/4] Fix heap OOB write in Robust AV SCS Response handler
+
+In wpas_handle_robust_av_scs_recv_action, scs_resp[0] and scs_resp[1]
+were allocated using os_zalloc(num_active_scs), which allocates
+num_active_scs bytes instead of num_active_scs * sizeof(int).
+Since these buffers are used as int arrays, this led to heap
+out-of-bounds writes.
+
+This change replaces the incorrect os_zalloc calls with os_calloc,
+ensuring that the correct amount of memory is allocated for the
+number of integer elements required.
+
+Bug: 511544607
+Test: m wpa_supplicant
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:cf85a899183ff43295acf570570e02e4dde5ee7a
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:d046f3543dc4365bff8594b9dc1b615efa87aae8
+Merged-In: I85e2a9b203f27d39403dad8341b393491b9067ae
+Change-Id: I85e2a9b203f27d39403dad8341b393491b9067ae
+---
+ wpa_supplicant/robust_av.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/wpa_supplicant/robust_av.c b/wpa_supplicant/robust_av.c
+index 588f8c7..14b80cc 100644
+--- a/wpa_supplicant/robust_av.c
++++ b/wpa_supplicant/robust_av.c
+@@ -1072,13 +1072,13 @@ void wpas_handle_robust_av_scs_recv_action(struct wpa_supplicant *wpa_s,
+ 		return;
+ 	}
+ 
+-	scs_resp[0] = (int *) os_zalloc(num_active_scs);
++	scs_resp[0] = os_calloc(num_active_scs, sizeof(int));
+ 	if (!scs_resp[0]) {
+ 		wpa_printf(MSG_ERROR, "Failed to allocate memory for scs_resp");
+ 		return;
+ 	}
+ 
+-	scs_resp[1] = (int *) os_zalloc(num_active_scs);
++	scs_resp[1] = os_calloc(num_active_scs, sizeof(int));
+ 	if (!scs_resp[1]) {
+ 		os_free(scs_resp[0]);
+ 		wpa_printf(MSG_ERROR, "Failed to allocate memory for scs_resp");
+-- 
+2.55.0
+

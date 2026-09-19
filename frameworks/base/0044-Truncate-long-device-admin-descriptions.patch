@@ -1,0 +1,114 @@
+From 4073974eaac62b92d6fc4eba93b7df34c841dfc4 Mon Sep 17 00:00:00 2001
+From: Gabriel Roman <gabrielroman@google.com>
+Date: Fri, 15 May 2026 07:02:42 -0700
+Subject: [PATCH 44/49] Truncate long device admin descriptions
+
+Limit the length of the description loaded from a device admin's
+manifest to a maximum of 1024 characters. This prevents potential issues
+with excessively long descriptions.
+
+Bug: 492093013
+Test: manual
+Flag: EXEMPT BUGFIX
+
+Limit the length of the description loaded from a device admin's manifest to a maximum of 8192 characters. This prevents potential issues with excessively long descriptions.
+
+Bug: 492093013
+Test: manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:f1ed046d2c48a38b9a800ef6a86cc14d3ab312a3
+Security vulnerability cherry pick for https://b.corp.google.com/issues/492093013
+Topic: https://googleplex-android-review.git.corp.google.com/q/topic:%22b492093013%22
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:8096808a53e8e4282917d0c5d13cfade92ea0435
+Merged-In: I06b621e37d97fd8554172c2446e2838dfaccc104
+Change-Id: I06b621e37d97fd8554172c2446e2838dfaccc104
+---
+ .../android/app/admin/DeviceAdminInfo.java    | 11 ++++++++++
+ .../android/content/pm/ComponentInfo.java     | 22 +++++++++++++++++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/core/java/android/app/admin/DeviceAdminInfo.java b/core/java/android/app/admin/DeviceAdminInfo.java
+index 7616d805c31c..2f02e49a86e4 100644
+--- a/core/java/android/app/admin/DeviceAdminInfo.java
++++ b/core/java/android/app/admin/DeviceAdminInfo.java
+@@ -483,6 +483,17 @@ public final class DeviceAdminInfo implements Parcelable {
+         throw new NotFoundException();
+     }
+ 
++    /**
++     * @hide
++     * Load user-visible description associated with this device admin. The description is trimmed
++     * to 1024 characters by leveraging {@link ComponentInfo#loadDescription(PackageManager)}.
++     *
++     * @param pm Supply a PackageManager used to load the device admin's resources.
++     */
++    public CharSequence loadDescriptionSafe(@NonNull PackageManager pm) throws NotFoundException {
++        return mActivityInfo.loadDescription(pm);
++    }
++
+     /**
+      * Load the user-displayed icon for this device admin.
+      *
+diff --git a/core/java/android/content/pm/ComponentInfo.java b/core/java/android/content/pm/ComponentInfo.java
+index 893cf86c6351..ed503229aef8 100644
+--- a/core/java/android/content/pm/ComponentInfo.java
++++ b/core/java/android/content/pm/ComponentInfo.java
+@@ -16,6 +16,7 @@
+ 
+ package android.content.pm;
+ 
++import android.annotation.NonNull;
+ import android.annotation.SuppressLint;
+ import android.app.Activity;
+ import android.app.Service;
+@@ -24,12 +25,15 @@ import android.content.BroadcastReceiver;
+ import android.content.ComponentName;
+ import android.content.ContentResolver;
+ import android.content.Context;
++import android.content.res.Resources.NotFoundException;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.text.TextUtils;
+ import android.util.Printer;
+ 
++import java.util.Objects;
++
+ /**
+  * Base class containing information common to all application components
+  * ({@link ActivityInfo}, {@link ServiceInfo}).  This class is not intended
+@@ -106,6 +110,9 @@ public class ComponentInfo extends PackageItemInfo {
+      */
+     public boolean directBootAware = false;
+ 
++    /** @hide */
++    public static final int MAX_SAFE_DESCRIPTION_LENGTH = 1024;
++
+     private static final int FLAG_ENABLED = 1 << 0;
+     private static final int FLAG_EXPORTED = 1 << 1;
+     private static final int FLAG_DIRECT_BOOT_AWARE = 1 << 2;
+@@ -158,6 +165,21 @@ public class ComponentInfo extends PackageItemInfo {
+         return name;
+     }
+ 
++    /** @hide */
++    public CharSequence loadDescription(@NonNull PackageManager pm) {
++        Objects.requireNonNull(pm);
++        if (descriptionRes != 0) {
++            try {
++                return TextUtils.trimToSize(
++                        pm.getText(packageName, descriptionRes, applicationInfo),
++                        MAX_SAFE_DESCRIPTION_LENGTH);
++            } catch (OutOfMemoryError e) {
++                throw new NotFoundException();
++            }
++        }
++        throw new NotFoundException();
++    }
++
+     /**
+      * Return whether this component and its enclosing application are enabled.
+      */
+-- 
+2.55.0
+

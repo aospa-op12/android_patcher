@@ -1,0 +1,358 @@
+From 3d2ef1dec358c4a7e3ca9b06f6fdaa2043642b77 Mon Sep 17 00:00:00 2001
+From: chihtinglo <chihtinglo@google.com>
+Date: Thu, 21 May 2026 10:45:15 +0000
+Subject: [PATCH 38/49] Move input sink on top of the Activity when needed
+
+An Activity below the TaskFragments could be exposed to user touches
+since (1) the upper TaskFragments do not fill the entire Task, and (2)
+the bounds of the Activity within the TaskFragment and the Activity
+below in the hierarchy can be different.
+Therefore, we will need an input sink above the Activity to block the
+touches between the TaskFragments. This change could avoid the risk of
+tapjecking within the Task.
+
+Bug: 490083213
+Test: atest WmTests:ActivityRecordInputSinkTests
+Test: atest CtsWindowManagerDeviceActivity:ActivityRecordInputSinkTests
+Test: atest CtsWindowManagerDeviceInput:WindowUntrustedTouchTest
+Test: atest CtsWindowManagerSdk35TestCases:ActivityRecordInputSinkTestsSdk35
+Test: atest CtsWindowManagerSdk35TestCases:WindowUntrustedTouchTestSdk35
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:42b79155a6b7ffdf1cfc2552d854b9cd9692d381
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:ad8bee570e3661dcc777eb4ff109b7dc795efd2d
+Merged-In: Ia9ea05e190cb809516de5765262b8cbee7676769
+Change-Id: Ia9ea05e190cb809516de5765262b8cbee7676769
+---
+ .../server/wm/ActivityRecordInputSink.java    |  91 +++++++++++--
+ .../wm/ActivityRecordInputSinkTests.java      | 128 +++++++++++++++++-
+ 2 files changed, 209 insertions(+), 10 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/ActivityRecordInputSink.java b/services/core/java/com/android/server/wm/ActivityRecordInputSink.java
+index a300a2494e6b..d5d912d8120d 100644
+--- a/services/core/java/com/android/server/wm/ActivityRecordInputSink.java
++++ b/services/core/java/com/android/server/wm/ActivityRecordInputSink.java
+@@ -60,6 +60,7 @@ class ActivityRecordInputSink {
+ 
+     private InputWindowHandleWrapper mInputWindowHandleWrapper;
+     private SurfaceControl mSurfaceControl;
++    private boolean mBlockTouchesFromTop;
+ 
+     ActivityRecordInputSink(ActivityRecord activityRecord, ActivityRecord sourceRecord,
+             boolean appOptInTouchPassThrough) {
+@@ -84,30 +85,52 @@ class ActivityRecordInputSink {
+     }
+ 
+     public void applyChangesToSurfaceIfChanged(SurfaceControl.Transaction transaction) {
+-        InputWindowHandleWrapper inputWindowHandleWrapper = getInputWindowHandleWrapper();
++        final boolean blockTouchesFromTop = isBlockingTouchesFromTopNeeded();
++        final InputWindowHandleWrapper inputWindowHandleWrapper =
++                getInputWindowHandleWrapper(blockTouchesFromTop);
+         if (mSurfaceControl == null) {
+-            mSurfaceControl = createSurface(transaction);
++            mSurfaceControl = createSurface();
++            updateInputSinkZOrder(transaction, blockTouchesFromTop);
++        } else if (mBlockTouchesFromTop != blockTouchesFromTop) {
++            updateInputSinkZOrder(transaction, blockTouchesFromTop);
+         }
+         if (inputWindowHandleWrapper.isChanged()) {
+             inputWindowHandleWrapper.applyChangesToSurface(transaction, mSurfaceControl);
+         }
+     }
+ 
+-    private SurfaceControl createSurface(SurfaceControl.Transaction t) {
++    private SurfaceControl createSurface() {
+         SurfaceControl surfaceControl = mActivityRecord.makeChildSurface(null)
+                 .setName(mName)
+                 .setHidden(false)
+                 .setCallsite("ActivityRecordInputSink.createSurface")
+                 .build();
+-        // Put layer below all siblings (and the parent surface too)
+-        t.setLayer(surfaceControl, Integer.MIN_VALUE);
+         return surfaceControl;
+     }
+ 
+-    private InputWindowHandleWrapper getInputWindowHandleWrapper() {
++    private void updateInputSinkZOrder(
++            SurfaceControl.Transaction t, boolean blockTouchesFromTop) {
++        // Put the layer above all siblings if the touches need to be blocked from top, otherwise,
++        // put layer below all siblings (and the parent surface too)
++        t.setLayer(mSurfaceControl, blockTouchesFromTop ? Integer.MAX_VALUE : Integer.MIN_VALUE);
++        mBlockTouchesFromTop = blockTouchesFromTop;
++    }
++
++    private InputWindowHandleWrapper getInputWindowHandleWrapper(
++            boolean blockTouchesFromTop) {
+         if (mInputWindowHandleWrapper == null) {
+             mInputWindowHandleWrapper = new InputWindowHandleWrapper(createInputWindowHandle());
+         }
++        mInputWindowHandleWrapper.setDisplayId(mActivityRecord.getDisplayId());
++
++        if (blockTouchesFromTop) {
++            // Early return if the caller explicitly specifies that an input sink is required on top
++            // of the Activity to intercept the touch events.
++            mInputWindowHandleWrapper.setInputConfigMasked(
++                    InputConfig.DEFAULT, InputConfig.NOT_TOUCHABLE);
++            return mInputWindowHandleWrapper;
++        }
++
+         // Don't block touches from passing through to an activity below us in the same task, if
+         // that activity is either from the same uid or if that activity has launched an activity
+         // in our uid.
+@@ -123,9 +146,9 @@ class ActivityRecordInputSink {
+                     InputConfig.NOT_TOUCHABLE);
+         } else {
+             // Set to touchable, so it can block by intercepting the touch events.
+-            mInputWindowHandleWrapper.setInputConfigMasked(0, InputConfig.NOT_TOUCHABLE);
++            mInputWindowHandleWrapper.setInputConfigMasked(
++                    InputConfig.DEFAULT, InputConfig.NOT_TOUCHABLE);
+         }
+-        mInputWindowHandleWrapper.setDisplayId(mActivityRecord.getDisplayId());
+         return mInputWindowHandleWrapper;
+     }
+ 
+@@ -141,6 +164,58 @@ class ActivityRecordInputSink {
+         return inputWindowHandle;
+     }
+ 
++    /**
++     * A non-embedded Activity below the TaskFragments could be exposed to user touches since
++     * (1) the upper TaskFragments do not fill the entire Task, and (2) the bounds of the Activity
++     * within the TaskFragment and the Activity below in the hierarchy can be different. Therefore,
++     * we move the input sink above for the top most Activity that is covered partially to block the
++     * touches. This could help avoid tapjacking happening within a Task.
++     *
++     * @return true if the ActivityRecord is visible to users, and it is below a TaskFragment with
++     * a different Uid.
++     */
++    private boolean isBlockingTouchesFromTopNeeded() {
++        if (!mActivityRecord.isVisibleRequested()
++                // Based on the trust model for embedded Activities, return early if this Activity
++                // is embedded.
++                || mActivityRecord.isEmbedded()
++                || mActivityRecord.inTransition()) {
++            return false;
++        }
++
++        final Task task = mActivityRecord.getTask();
++        if (task == null) {
++            return false;
++        }
++        final int indexOfActivityRecord = task.mChildren.indexOf(mActivityRecord);
++        if (indexOfActivityRecord < 0) {
++            return false;
++        }
++
++        // Traversing from bottom to top
++        for (int i = indexOfActivityRecord + 1; i < task.getChildCount(); i++) {
++            WindowContainer child = task.getChildAt(i);
++            if (!child.isVisibleRequested()) {
++                // If the child is not visible, it doesn't need to be considered for blocking
++                // touches from the top.
++                continue;
++            }
++
++            final TaskFragment tf = child.asTaskFragment();
++            if (tf != null) {
++                if (!mActivityRecord.isUid(tf.mTaskFragmentOrganizerUid)
++                        && tf.mTaskFragmentOrganizerUid != mActivityRecord.mAllowedTouchUid) {
++                    return true;
++                }
++            } else {
++                // We rely on the input sink of the visible Activity above to take care of the input
++                // handling. Therefore, returning false once we meet a child of a visible Activity.
++                return false;
++            }
++        }
++        return false;
++    }
++
+     void releaseSurfaceControl() {
+         if (mSurfaceControl != null) {
+             mSurfaceControl.release();
+diff --git a/services/tests/wmtests/src/com/android/server/wm/ActivityRecordInputSinkTests.java b/services/tests/wmtests/src/com/android/server/wm/ActivityRecordInputSinkTests.java
+index 675836aafe2c..92a292272001 100644
+--- a/services/tests/wmtests/src/com/android/server/wm/ActivityRecordInputSinkTests.java
++++ b/services/tests/wmtests/src/com/android/server/wm/ActivityRecordInputSinkTests.java
+@@ -22,8 +22,13 @@ import static org.junit.Assert.assertTrue;
+ import android.app.Activity;
+ import android.app.ActivityManager;
+ import android.app.UiAutomation;
++import android.compat.testing.PlatformCompatChangeRule;
++import android.content.ComponentName;
++import android.content.Intent;
+ import android.graphics.Rect;
++import android.os.Binder;
+ import android.os.Bundle;
++import android.os.IBinder;
+ import android.os.SystemClock;
+ import android.platform.test.annotations.RequiresFlagsDisabled;
+ import android.platform.test.annotations.RequiresFlagsEnabled;
+@@ -32,6 +37,9 @@ import android.platform.test.flag.junit.DeviceFlagsValueProvider;
+ import android.view.MotionEvent;
+ import android.view.ViewGroup;
+ import android.widget.Button;
++import android.window.TaskFragmentCreationParams;
++import android.window.TaskFragmentOrganizer;
++import android.window.WindowContainerTransaction;
+ import android.window.WindowInfosListenerForTest;
+ import android.window.WindowInfosListenerForTest.DisplayInfo;
+ import android.window.WindowInfosListenerForTest.WindowInfo;
+@@ -44,10 +52,14 @@ import androidx.test.platform.app.InstrumentationRegistry;
+ 
+ import com.android.window.flags.Flags;
+ 
++import libcore.junit.util.compat.CoreCompatChangeRule.DisableCompatChanges;
++import libcore.junit.util.compat.CoreCompatChangeRule.EnableCompatChanges;
++
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Rule;
+ import org.junit.Test;
++import org.junit.rules.TestRule;
+ import org.junit.runner.RunWith;
+ 
+ import java.util.List;
+@@ -68,6 +80,9 @@ public class ActivityRecordInputSinkTests {
+     @Rule
+     public final CheckFlagsRule mCheckFlagsRule = DeviceFlagsValueProvider.createCheckFlagsRule();
+ 
++    @Rule
++    public TestRule compatChangeRule = new PlatformCompatChangeRule();
++
+     @Rule
+     public final ActivityScenarioRule<TestActivity> mActivityRule =
+             new ActivityScenarioRule<>(TestActivity.class);
+@@ -141,6 +156,96 @@ public class ActivityRecordInputSinkTests {
+         });
+     }
+ 
++    @Test
++    @EnableCompatChanges(
++            {ActivityRecordInputSink.ENABLE_OVERLAY_TOUCH_PASS_THROUGH_OPT_IN_ENFORCEMENT})
++    public void testTouchPassthrough_TaskFragmentSameUid() throws InterruptedException {
++        Intent intent = new Intent(InstrumentationRegistry.getInstrumentation().getContext(),
++                TestActivity.class);
++
++        // Same UID: No InputSink created, touch should pass through (1 click)
++        runTaskFragmentTouchTest(intent,  /* waitForSink= */ false, /* expectedClicks= */ 1);
++    }
++
++    @Test
++    @EnableCompatChanges(
++            {ActivityRecordInputSink.ENABLE_OVERLAY_TOUCH_PASS_THROUGH_OPT_IN_ENFORCEMENT})
++    public void testTouchPassthrough_TaskFragmentDifferentUid_enableCompatChanges()
++            throws InterruptedException {
++        Intent intent = new Intent();
++        intent.setComponent(ComponentName.unflattenFromString(OVERLAY_ACTIVITY));
++
++        // Different UID: InputSink created, touch should be blocked (0 clicks)
++        runTaskFragmentTouchTest(intent, /* waitForSink= */ true , /* expectedClicks= */ 0);
++    }
++
++    @Test
++    @DisableCompatChanges(
++            {ActivityRecordInputSink.ENABLE_OVERLAY_TOUCH_PASS_THROUGH_OPT_IN_ENFORCEMENT})
++    public void testTouchPassthrough_TaskFragmentDifferentUid_disableCompatChanges()
++            throws InterruptedException {
++        Intent intent = new Intent();
++        intent.setComponent(ComponentName.unflattenFromString(OVERLAY_ACTIVITY));
++
++        // Different UID, but compat change disabled: No InputSink created, touch should pass
++        // through (1 click)
++        runTaskFragmentTouchTest(intent, /* waitForSink= */ false , /* expectedClicks= */ 1);
++    }
++
++    private void runTaskFragmentTouchTest(Intent intent, boolean waitForSink, int expectedClicks)
++            throws InterruptedException {
++        TaskFragmentOrganizer organizer = new TaskFragmentOrganizer(Runnable::run);
++        mUiAutomation.adoptShellPermissionIdentity();
++
++        try {
++            organizer.registerOrganizer();
++
++            mActivityRule.getScenario().onActivity(activity -> {
++                IBinder fragmentToken = new Binder();
++                WindowContainerTransaction wct = new WindowContainerTransaction();
++
++                Rect buttonBounds = new Rect();
++                activity.mButton.getBoundsOnScreen(buttonBounds);
++
++                // Create a TaskFragment that covers the left half of the button area
++                wct.createTaskFragment(new TaskFragmentCreationParams.Builder(
++                        organizer.getOrganizerToken(),
++                        fragmentToken,
++                        activity.getActivityToken())
++                        .setInitialRelativeBounds(new Rect(0, 0,
++                                buttonBounds.centerX(),
++                                buttonBounds.bottom))
++                        .build());
++
++                // Start the provided activity into the fragment
++                wct.startActivityInTaskFragment(fragmentToken, activity.getActivityToken(),
++                        intent, /* activityOptions= */ null);
++
++                organizer.applyTransaction(
++                        wct, TaskFragmentOrganizer.TASK_FRAGMENT_TRANSIT_OPEN, false);
++            });
++
++            if (waitForSink) {
++                // Wait for the ActivityRecordInputSink to be created (Different UID case)
++                waitForOverlayApp();
++            } else {
++                // Just wait for the hierarchy to settle (Same UID case)
++                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
++            }
++
++            // Tap on the area that is not covered by the TaskFragment
++            injectTapOnButtonAtPosition(0.75f, 0.5f);
++
++            mActivityRule.getScenario().onActivity(a -> {
++                assertEquals("Click count mismatch for UID test", expectedClicks, a.mNumClicked);
++            });
++
++        } finally {
++            organizer.unregisterOrganizer();
++            mUiAutomation.dropShellPermissionIdentity();
++        }
++    }
++
+     private void startOverlayApp(boolean disableInputSink) {
+         String launchCommand = "am start -n " + OVERLAY_ACTIVITY;
+         if (disableInputSink) {
+@@ -177,12 +282,31 @@ public class ActivityRecordInputSinkTests {
+     }
+ 
+     private void injectTapOnButton() {
++        injectTapOnButtonAtPosition(0.5f, 0.5f);
++    }
++
++    /**
++     * Injects a tap event on the button at a specific relative position.
++     *
++     * The tap coordinates are calculated as a fraction of the button's dimensions
++     * relative to its top-left corner. For example:
++     * - (0.0f, 0.0f) taps the top-left corner.
++     * - (0.5f, 0.5f) taps the exact center.
++     * - (1.0f, 1.0f) taps the bottom-right corner.
++     *
++     * @param xOffsetRatio The fractional X coordinate along the button's width
++     *                     (0.0 is the left edge, 1.0 is the right edge).
++     * @param yOffsetRatio The fractional Y coordinate along the button's height
++     *                     (0.0 is the top edge, 1.0 is the bottom edge).
++     */
++    private void injectTapOnButtonAtPosition(float xOffsetRatio, float yOffsetRatio) {
+         Rect buttonBounds = new Rect();
+         mActivityRule.getScenario().onActivity(a -> {
+             a.mButton.getBoundsOnScreen(buttonBounds);
+         });
+-        final int x = buttonBounds.centerX();
+-        final int y = buttonBounds.centerY();
++
++        final int x = (int) (buttonBounds.left + buttonBounds.width() * xOffsetRatio);
++        final int y = (int) (buttonBounds.top + buttonBounds.height() * yOffsetRatio);
+ 
+         MotionEvent down = MotionEvent.obtain(SystemClock.uptimeMillis(),
+                 SystemClock.uptimeMillis(), MotionEvent.ACTION_DOWN, x, y, 0);
+-- 
+2.55.0
+

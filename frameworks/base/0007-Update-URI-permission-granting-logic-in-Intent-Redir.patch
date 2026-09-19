@@ -1,7 +1,7 @@
-From 7847e9763d3635cd018c75f46798cf416a999bf0 Mon Sep 17 00:00:00 2001
+From 78a2611406539bf0b49a5383cf6dc004ded3ee0f Mon Sep 17 00:00:00 2001
 From: Yang Kudurshian <scarlety@google.com>
 Date: Tue, 24 Mar 2026 09:54:43 -0700
-Subject: [PATCH 07/27] Update URI permission granting logic in Intent
+Subject: [PATCH 07/49] Update URI permission granting logic in Intent
  Redirection Hardening
 
 Updating the Intent URI Grant Permission logic to require explicit authorization from both callingUid and the intentCreatorUid.

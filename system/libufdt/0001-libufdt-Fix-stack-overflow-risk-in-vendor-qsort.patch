@@ -1,0 +1,77 @@
+From 10996be7b43279d37a6f91cf0ec20e1b9b244a43 Mon Sep 17 00:00:00 2001
+From: Mike McTernan <mikemcternan@google.com>
+Date: Tue, 16 Jun 2026 12:25:29 +0100
+Subject: [PATCH] libufdt: Fix stack overflow risk in vendor qsort
+
+Optimize the qsort implementation in libufdt_sysdeps_vendor.c by
+recursing on the smaller partition and iterating on the larger
+partition. This limits the maximum recursion depth to O(log n)
+stack frames, preventing potential stack overflows on large or
+adversarial inputs.
+
+Bug: 509980995
+Test: Standalone test suite (1M elements, ASan/UBSan/Valgrind passed)
+Test: tests/run_tests.sh
+Test: tests/run_performance_test.sh
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:df9856866b8d8b19058beb8e418c588cd47c60dc
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:90b1784cced8f5d1834a87dbf6fa8e1e74ef5448
+Merged-In: I260075b5280433ae59b61edef9b30cb6610bd02f
+Change-Id: I260075b5280433ae59b61edef9b30cb6610bd02f
+---
+ sysdeps/libufdt_sysdeps_vendor.c | 31 +++++++++++++++++++++++--------
+ 1 file changed, 23 insertions(+), 8 deletions(-)
+
+diff --git a/sysdeps/libufdt_sysdeps_vendor.c b/sysdeps/libufdt_sysdeps_vendor.c
+index fc5b186..57d334a 100644
+--- a/sysdeps/libufdt_sysdeps_vendor.c
++++ b/sysdeps/libufdt_sysdeps_vendor.c
+@@ -100,7 +100,7 @@ static __inline char *med3(char *a, char *b, char *c,
+ void qsort(void *aa, size_t n, size_t es,
+            int (*cmp)(const void *, const void *)) {
+   char *pa, *pb, *pc, *pd, *pl, *pm, *pn;
+-  int d, r, swaptype, swap_cnt;
++  int d, l, r, swaptype, swap_cnt;
+   char *a = aa;
+ loop:
+   SWAPINIT(a, es);
+@@ -161,14 +161,29 @@ loop:
+   vecswap(a, pb - r, r);
+   r = min(pd - pc, pn - pd - (int)es);
+   vecswap(pb, pn - r, r);
+-  if ((r = pb - pa) > (int)es) qsort(a, r / es, es, cmp);
+-  if ((r = pd - pc) > (int)es) {
+-    /* Iterate rather than recurse to save stack space */
+-    a = pn - r;
+-    n = r / es;
+-    goto loop;
++
++  l = pb - pa; /* size of partition 'left' of pivot */
++  r = pd - pc; /* size of partition 'right' of pivot */
++
++  /* recurse on the smaller partition, iterate on larger */
++  if (l < r) {
++    if (l > (int)es) {
++      qsort(a, l / es, es, cmp);
++    }
++    if (r > (int)es) {
++      a = pn - r;
++      n = r / es;
++      goto loop;
++    }
++  } else {
++    if (r > (int)es) {
++      qsort(pn - r, r / es, es, cmp);
++    }
++    if (l > (int)es) {
++      n = l / es;
++      goto loop;
++    }
+   }
+-  /* qsort(pn - r, r / es, es, cmp); */
+ }
+ 
+ /* End of the copied qsort. */
+-- 
+2.55.0
+

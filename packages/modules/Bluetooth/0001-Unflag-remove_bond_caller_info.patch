@@ -1,7 +1,7 @@
-From d2889deb6ea3487b8a62a84544709811d5816bef Mon Sep 17 00:00:00 2001
+From 2b43394e33b013cf9802d136d29f6ae99a157d45 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Thu, 30 Apr 2026 11:07:19 -0700
-Subject: [PATCH 01/10] Unflag remove_bond_caller_info
+Subject: [PATCH 01/12] Unflag remove_bond_caller_info
 
 The logic to remove bond caller information when bonding is concluded is
 now always enabled, as the flag remove_bond_caller_info has been

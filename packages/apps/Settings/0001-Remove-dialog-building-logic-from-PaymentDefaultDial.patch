@@ -1,7 +1,7 @@
-From b8d07fb7a3b2462dc744a2801e2d7039ff6ddb2e Mon Sep 17 00:00:00 2001
+From 196d30e279c8e86b0454280498df39ed1880d4d1 Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Wed, 8 Apr 2026 01:36:37 -0700
-Subject: [PATCH 1/5] Remove dialog building logic from PaymentDefaultDialog
+Subject: [PATCH 1/8] Remove dialog building logic from PaymentDefaultDialog
  onCreate.
 
 The code to extract intent extras and build the default payment dialog is no longer executed in the onCreate method.

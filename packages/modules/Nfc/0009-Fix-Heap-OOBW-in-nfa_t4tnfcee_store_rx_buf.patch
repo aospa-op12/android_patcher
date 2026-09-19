@@ -1,0 +1,136 @@
+From 5e51ea830a501c86c3d11c94c539f954b7d62d44 Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Mon, 18 May 2026 11:51:11 +0000
+Subject: [PATCH 09/13] Fix Heap OOBW in nfa_t4tnfcee_store_rx_buf()
+
+Implement bounds check in nfa_t4tnfcee_store_rx_buf to prevent heap
+out-of-bounds write when reading data from T4T NFCEE.
+
+Also fix adjacent vulnerabilities in nfa_nfcee_act.cc:
+- Fix uint16 underflow in nfa_t4tnfcee_store_cc_info.
+- Fix pointer underflow in nfa_t4tnfcee_check_sw.
+- Add NULL check for p_dataBuf allocation.
+
+Bug: 508390497
+Test: R/W T4T tags
+Flag: EXEMPT CVE_FIX
+(cherry picked from commit dcbd63d5d860243c331b8308f2192bdaefddb65f)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:760cb019461de52a31da9d038735abdd18b1e64e
+Merged-In: I6c39b1f2dbf8ab6aa3d2d8ddc73abecc4a72598a
+Change-Id: I6c39b1f2dbf8ab6aa3d2d8ddc73abecc4a72598a
+---
+ libnfc-nci/src/nfa/include/nfa_nfcee_int.h    |  1 +
+ .../src/nfa/ndefnfcee/t4t/nfa_nfcee_act.cc    | 41 +++++++++++++++++--
+ 2 files changed, 38 insertions(+), 4 deletions(-)
+
+diff --git a/libnfc-nci/src/nfa/include/nfa_nfcee_int.h b/libnfc-nci/src/nfa/include/nfa_nfcee_int.h
+index af978aa..11d5862 100644
+--- a/libnfc-nci/src/nfa/include/nfa_nfcee_int.h
++++ b/libnfc-nci/src/nfa/include/nfa_nfcee_int.h
+@@ -136,6 +136,7 @@ typedef struct {
+   tNFA_T4TNFCEE_RW_STATE rw_state;    /* Read Write state */
+   tNFA_T4TNFCEE_MSG* p_pending_msg;   /* Pending command */
+   uint8_t* p_dataBuf;                 /* Data buffer */
++  uint32_t p_dataBuf_len;             /* Allocated size of Data buffer */
+   uint16_t cur_fileId;                /* Current FileId */
+   uint16_t rd_offset;        /* current read-offset of incoming NDEF data  */
+   uint32_t dataLen;          /*length of the data*/
+diff --git a/libnfc-nci/src/nfa/ndefnfcee/t4t/nfa_nfcee_act.cc b/libnfc-nci/src/nfa/ndefnfcee/t4t/nfa_nfcee_act.cc
+index e32d0e1..ed95bec 100644
+--- a/libnfc-nci/src/nfa/ndefnfcee/t4t/nfa_nfcee_act.cc
++++ b/libnfc-nci/src/nfa/ndefnfcee/t4t/nfa_nfcee_act.cc
+@@ -18,6 +18,7 @@
+ 
+ #include <android-base/logging.h>
+ #include <android-base/stringprintf.h>
++#include <log/log.h>
+ #include <string.h>
+ 
+ #include <iomanip>
+@@ -65,6 +66,7 @@ void nfa_t4tnfcee_free_rx_buf(void) {
+     nfa_mem_co_free(nfa_t4tnfcee_cb.p_dataBuf);
+     nfa_t4tnfcee_cb.p_dataBuf = NULL;
+   }
++  nfa_t4tnfcee_cb.p_dataBuf_len = 0;
+   nfa_t4tnfcee_cb.rd_offset = 0x00;
+   nfa_t4tnfcee_cb.dataLen = 0x00;
+ }
+@@ -189,6 +191,12 @@ static void nfa_t4tnfcee_check_sw(tRW_DATA* p_rwData) {
+   uint8_t* p;
+   uint16_t status_words;
+   NFC_HDR* p_r_apdu = p_rwData->raw_frame.p_data;
++  if (p_r_apdu->len < T4T_RSP_STATUS_WORDS_SIZE) {
++    p_rwData->raw_frame.status = NFC_STATUS_FAILED;
++    LOG(ERROR) << StringPrintf("%s: Invalid p_r_apdu->len %d", __func__,
++                               p_r_apdu->len);
++    return;
++  }
+   p = (uint8_t*)(p_r_apdu + 1) + p_r_apdu->offset;
+   p += (p_r_apdu->len - T4T_RSP_STATUS_WORDS_SIZE);
+   BE_STREAM_TO_UINT16(status_words, p);
+@@ -251,9 +259,19 @@ void nfa_t4tnfcee_store_cc_info(NFC_HDR* p_data) {
+       ccInfo = (uint8_t*)(p_data + 1) +
+                p_data->offset;  // CC data does not require NDEF header offset
+       nfa_t4tnfcee_cb.p_dataBuf = (uint8_t*)nfa_mem_co_alloc(p_data->len);
+-      memcpy(&nfa_t4tnfcee_cb.p_dataBuf[0], ccInfo, p_data->len);
++      if (nfa_t4tnfcee_cb.p_dataBuf != nullptr) {
++        nfa_t4tnfcee_cb.p_dataBuf_len = p_data->len;
++        memcpy(&nfa_t4tnfcee_cb.p_dataBuf[0], ccInfo, p_data->len);
++      } else {
++        nfa_t4tnfcee_cb.p_dataBuf_len = 0;
++      }
+       return;
+     } else {
++      if (p_data->len < (0x07 + T4TNFCEE_SIZEOF_STATUS_BYTES)) {
++        LOG(ERROR) << StringPrintf("%s: Invalid CC len %d", __func__,
++                                   p_data->len);
++        return;
++      }
+       ccInfo = (uint8_t*)(p_data + 1) + p_data->offset + jumpToFirstTLV;
+     }
+   } else {
+@@ -297,9 +315,16 @@ void nfa_t4tnfcee_store_rx_buf(NFC_HDR* p_data) {
+                                __func__, p_data->len,
+                                nfa_t4tnfcee_cb.rd_offset);
+     p = (uint8_t*)(p_data + 1) + p_data->offset;
+-    memcpy(&nfa_t4tnfcee_cb.p_dataBuf[nfa_t4tnfcee_cb.rd_offset], p,
+-           p_data->len);
+-    nfa_t4tnfcee_cb.rd_offset += p_data->len;
++    if (((uint32_t)nfa_t4tnfcee_cb.rd_offset + p_data->len) <=
++        nfa_t4tnfcee_cb.p_dataBuf_len) {
++      memcpy(&nfa_t4tnfcee_cb.p_dataBuf[nfa_t4tnfcee_cb.rd_offset], p,
++             p_data->len);
++      nfa_t4tnfcee_cb.rd_offset += p_data->len;
++    } else {
++      LOG(ERROR) << StringPrintf("%s: Exceed p_dataBuf_len error", __func__);
++      nfa_t4tnfcee_cb.status = NFA_STATUS_FAILED;
++      android_errorWriteLog(0x534e4554, "508390497");
++    }
+   } else {
+     LOG(DEBUG) << StringPrintf("%s: Data is NULL", __func__);
+   }
+@@ -318,6 +343,7 @@ void nfa_t4tnfcee_initialize_data(tNFA_T4TNFCEE_MSG* p_data) {
+   nfa_t4tnfcee_cb.rw_state = PROP_DISABLED;
+   nfa_t4tnfcee_cb.rd_offset = 0;
+   nfa_t4tnfcee_cb.p_dataBuf = nullptr;
++  nfa_t4tnfcee_cb.p_dataBuf_len = 0;
+   nfa_t4tnfcee_cb.dataLen = 0x00;
+   BE_STREAM_TO_UINT16(nfa_t4tnfcee_cb.cur_fileId, p_data->op_req.p_fileId);
+ }
+@@ -442,6 +468,13 @@ void nfa_t4tnfcee_handle_file_operations(tRW_DATA* p_rwData) {
+       }
+ 
+       nfa_t4tnfcee_cb.p_dataBuf = (uint8_t*)nfa_mem_co_alloc(lenDataToBeRead);
++      if (nfa_t4tnfcee_cb.p_dataBuf == nullptr) {
++        nfa_t4tnfcee_cb.p_dataBuf_len = 0;
++        nfa_t4tnfcee_cb.status = NFC_STATUS_FAILED;
++        nfa_t4tnfcee_notify_rx_evt();
++        break;
++      }
++      nfa_t4tnfcee_cb.p_dataBuf_len = lenDataToBeRead;
+       RW_T4tNfceeReadFile(T4T_FILE_LENGTH_SIZE, lenDataToBeRead);
+       nfa_t4tnfcee_cb.rw_state = WAIT_READ_FILE;
+       break;
+-- 
+2.55.0
+

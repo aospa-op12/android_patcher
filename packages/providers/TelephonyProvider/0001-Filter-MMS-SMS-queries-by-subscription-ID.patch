@@ -1,7 +1,7 @@
-From 5fafbdfba56fab6a24610a411c316b712ddd27da Mon Sep 17 00:00:00 2001
+From 88d46cf1223aeeaa05b3cef578685a284fa7e5fd Mon Sep 17 00:00:00 2001
 From: Aishwarya Mallampati <amallampati@google.com>
 Date: Tue, 5 May 2026 11:08:12 -0700
-Subject: [PATCH] Filter MMS/SMS queries by subscription ID
+Subject: [PATCH 1/2] Filter MMS/SMS queries by subscription ID
 
 This change modifies MmsSmsProvider to filter results based on the subscription IDs associated with the current user. Queries for conversations, search suggestions, and search results will now return an empty cursor if no subscriptions are available for the user. Otherwise, the queries are augmented with a subId clause to restrict results to messages belonging to the user's subscriptions.
 

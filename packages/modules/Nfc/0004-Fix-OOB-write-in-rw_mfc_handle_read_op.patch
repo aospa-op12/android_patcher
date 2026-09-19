@@ -1,7 +1,7 @@
-From 4f68cd365515cd44c36e0573d1f688500daed836 Mon Sep 17 00:00:00 2001
+From e7f099eb5b939fba61366c35b80ec54ecec481fa Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Wed, 27 May 2026 01:23:26 +0000
-Subject: [PATCH 4/7] Fix OOB write in rw_mfc_handle_read_op
+Subject: [PATCH 04/13] Fix OOB write in rw_mfc_handle_read_op
 
 Buganizer issue b/503557185 reports a heap buffer overflow vulnerability in com.android.nfc during Mifare Classic NDEF reads.
 

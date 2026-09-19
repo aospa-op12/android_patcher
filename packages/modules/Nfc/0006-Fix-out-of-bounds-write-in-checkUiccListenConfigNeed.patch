@@ -1,7 +1,7 @@
-From 16fd2a435a5caf9ce4b2ad1ab5a2fe560da1157a Mon Sep 17 00:00:00 2001
+From 07068814294f5c268e42cc252ae33f9937494800 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Sat, 20 Jun 2026 01:56:50 +0000
-Subject: [PATCH 6/7] Fix out-of-bounds write in checkUiccListenConfigNeeded
+Subject: [PATCH 06/13] Fix out-of-bounds write in checkUiccListenConfigNeeded
 
 The `RoutingManager::checkUiccListenConfigNeeded` function lacked validation for the `nb_config` index against the maximum supported execution environments (`NFA_EE_MAX_EE_SUPPORTED`). If the maximum number of execution environments was exceeded, this flaw allowed an out-of-bounds write, potentially corrupting adjacent synchronization primitives and causing process crashes or deadlocks within the NFC system service.
 

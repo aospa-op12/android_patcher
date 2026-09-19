@@ -1,7 +1,7 @@
-From acec3e48096a1129888fb4b021daccc1dd1c2aa2 Mon Sep 17 00:00:00 2001
+From 4535bfa8188eabbcbea875094b8e7bd13427b94a Mon Sep 17 00:00:00 2001
 From: Sean Du <do4suki@gmail.com>
 Date: Thu, 17 Sep 2026 16:40:22 +0800
-Subject: [PATCH 07/10] Revert "[autocherry] AVRCP: Fix race condition in AVRCP
+Subject: [PATCH 07/12] Revert "[autocherry] AVRCP: Fix race condition in AVRCP
  SendMediaUpdate am: e67dd4d9a5 am: e67dd4d9a5"
 
 This reverts commit a52974c14ca777b4d9e42707e113685a4cdbc6e3.

@@ -1,0 +1,664 @@
+From 3b5ba6ecfe622adb1d962cd9e6392ac0ed4fd10f Mon Sep 17 00:00:00 2001
+From: Devarshi Bhatt <devarshimb@google.com>
+Date: Wed, 17 Jun 2026 20:59:08 -0700
+Subject: [PATCH 36/49] Add size validation and trimming for ShortcutInfo
+ objects.
+
+Introduces a maximum allowed size for a single ShortcutInfo object when parcelled (32KB). A new method `validateShortcutSize` is added to check this limit by writing the ShortcutInfo to a Parcel and checking its data size. If the shortcut size exceeds the limit, try to trim the Person array and Extras to get it under the limit. If the size still exceeds after trimming, drop the shortcut. This validation is applied to setDynamicShortcuts, addDynamicShortcuts, updateShortcuts, and pushDynamicShortcut to prevent apps from creating excessively large shortcuts.
+
+Bug: 451602444
+Test: atest ShortcutSizeValidationTest
+Flag: EXEMPT CVE_FIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:ab0a589a99bb3c45ad5d61753d5a8c7411197a5d
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:7b9e776e3d6a560b3047df95286e1232716aef27
+Merged-In: Icf99a408d16fb6b4e04b2e5014eff556e5948f95
+Change-Id: Icf99a408d16fb6b4e04b2e5014eff556e5948f95
+---
+ .../java/android/content/pm/ShortcutInfo.java |  57 +++-
+ .../android/server/pm/ShortcutService.java    | 141 ++++++++++
+ .../server/pm/BaseShortcutManagerTest.java    |  28 +-
+ .../server/pm/ShortcutManagerTest2.java       |   2 +-
+ .../server/pm/ShortcutSizeValidationTest.java | 264 ++++++++++++++++++
+ 5 files changed, 488 insertions(+), 4 deletions(-)
+ create mode 100644 services/tests/servicestests/src/com/android/server/pm/ShortcutSizeValidationTest.java
+
+diff --git a/core/java/android/content/pm/ShortcutInfo.java b/core/java/android/content/pm/ShortcutInfo.java
+index 5779a448014c..8830483643a2 100644
+--- a/core/java/android/content/pm/ShortcutInfo.java
++++ b/core/java/android/content/pm/ShortcutInfo.java
+@@ -508,8 +508,11 @@ public final class ShortcutInfo implements Parcelable {
+         mLocusId = b.mLocusId;
+         mCapabilityBindings =
+                 cloneCapabilityBindings(b.mCapabilityBindings);
++        // Use the resolved theme string from the builder (passed from the source ShortcutInfo)
++        // if no new theme resource ID has been explicitly set.
+         mStartingThemeResName = b.mStartingThemeResId != 0
+-                ? b.mContext.getResources().getResourceName(b.mStartingThemeResId) : null;
++                ? b.mContext.getResources().getResourceName(b.mStartingThemeResId)
++                : b.mStartingThemeResName;
+         updateTimestamp();
+     }
+ 
+@@ -613,6 +616,14 @@ public final class ShortcutInfo implements Parcelable {
+         Preconditions.checkArgument(mIntents.length > 0, "Shortcut Intent must be provided");
+     }
+ 
++    /**
++     * Copy constructor.
++     * @hide
++     */
++    public ShortcutInfo(ShortcutInfo source) {
++        this(source, 0);
++    }
++
+     /**
+      * Copy constructor.
+      */
+@@ -1092,6 +1103,8 @@ public final class ShortcutInfo implements Parcelable {
+ 
+         private int mStartingThemeResId;
+ 
++        private String mStartingThemeResName;
++
+         @Nullable
+         private Map<String, Map<String, List<String>>> mCapabilityBindings;
+ 
+@@ -1128,6 +1141,38 @@ public final class ShortcutInfo implements Parcelable {
+             mId = Preconditions.checkStringNotEmpty(id, "id cannot be empty");
+         }
+ 
++        /**
++         * Constructor.
++         *
++         * @param context Client context.
++         * @param source ShortcutInfo to copy from.
++         *
++         * @hide
++         */
++        public Builder(@NonNull Context context, @NonNull ShortcutInfo source) {
++            mContext = Objects.requireNonNull(context, "context cannot be null");
++            Objects.requireNonNull(source, "source cannot be null");
++            mId = source.mId;
++            mActivity = source.mActivity;
++            mIcon = source.mIcon;
++            mTitleResId = source.mTitleResId;
++            mTitle = source.mTitle;
++            mTextResId = source.mTextResId;
++            mText = source.mText;
++            mDisabledMessageResId = source.mDisabledMessageResId;
++            mDisabledMessage = source.mDisabledMessage;
++            mCategories = cloneCategories(source.mCategories);
++            mIntents = cloneIntents(source.mIntents);
++            mPersons = clonePersons(source.mPersons);
++            mIsLongLived = source.isLongLived();
++            mRank = source.mRank;
++            mExtras = source.mExtras;
++            mLocusId = source.mLocusId;
++            mStartingThemeResName = source.mStartingThemeResName;
++            mCapabilityBindings = cloneCapabilityBindings(source.mCapabilityBindings);
++            mExcludedSurfaces = source.mExcludedSurfaces;
++        }
++
+         /**
+          * Sets the {@link LocusId} associated with this shortcut.
+          *
+@@ -1793,6 +1838,16 @@ public final class ShortcutInfo implements Parcelable {
+         mRank = rank;
+     }
+ 
++    /** @hide */
++    public void setPersons(Person[] persons) {
++        mPersons = clonePersons(persons);
++    }
++
++    /** @hide */
++    public void setExtras(PersistableBundle extras) {
++        mExtras = extras;
++    }
++
+     /** @hide */
+     public void clearImplicitRankAndRankChangedFlag() {
+         mImplicitRank = 0;
+diff --git a/services/core/java/com/android/server/pm/ShortcutService.java b/services/core/java/com/android/server/pm/ShortcutService.java
+index d1aa78d21ee6..19dfc3e8c8e8 100644
+--- a/services/core/java/com/android/server/pm/ShortcutService.java
++++ b/services/core/java/com/android/server/pm/ShortcutService.java
+@@ -33,6 +33,7 @@ import android.app.ActivityOptions;
+ import android.app.AppGlobals;
+ import android.app.IUidObserver;
+ import android.app.IUriGrantsManager;
++import android.app.Person;
+ import android.app.UidObserver;
+ import android.app.UriGrantsManager;
+ import android.app.role.OnRoleHoldersChangedListener;
+@@ -86,6 +87,7 @@ import android.os.HandlerThread;
+ import android.os.IBinder;
+ import android.os.LocaleList;
+ import android.os.Looper;
++import android.os.Parcel;
+ import android.os.ParcelFileDescriptor;
+ import android.os.PersistableBundle;
+ import android.os.Process;
+@@ -293,6 +295,9 @@ public class ShortcutService extends IShortcutService.Stub {
+     private static final int SYSTEM_APP_MASK =
+             ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+ 
++    private static final int MAX_SHORTCUT_TOTAL_SIZE_BYTES = 32 * 1024;
++    private static final int MAX_TRIMMED_PERSONS = 20;
++
+     final Context mContext;
+ 
+     @VisibleForTesting
+@@ -1856,6 +1861,35 @@ public class ShortcutService extends IShortcutService.Stub {
+         }
+     }
+ 
++    private void sanitizeShortcutSizes(List<ShortcutInfo> list) {
++        final int size = list.size();
++        final Parcel p = Parcel.obtain();
++        try {
++            // Iterate backwards to safely remove items from the list.
++            for (int i = size - 1; i >= 0; i--) {
++                ShortcutInfo si = list.get(i);
++                if (si == null) {
++                    list.remove(i);
++                    continue;
++                }
++                ShortcutInfo result = sanitizeShortcutSize(si, p);
++
++                if (result == null) {
++                    // Drop the shortcut if it cannot be trimmed under the limit.
++                    list.remove(i);
++                    Slog.w(TAG, "ShortcutInfo for ID '" + si.getId()
++                            + "'" + (si.getActivity() != null ? " for activity " + si.getActivity() : "")
++                            + " is too large. Dropping it.");
++                } else if (result != si) {
++                    // Replace with the trimmed version.
++                    list.set(i, result);
++                }
++            }
++        } finally {
++            p.recycle();
++        }
++    }
++
+     // Overridden in unit tests to execute r synchronously.
+     void injectPostToHandler(Runnable r) {
+         mHandler.post(r);
+@@ -2090,6 +2124,60 @@ public class ShortcutService extends IShortcutService.Stub {
+         }
+     }
+ 
++    /**
++     * Sanitizes a ShortcutInfo object before persistence.
++     * Sanitizes that the parcelled size of a {@link ShortcutInfo} does not exceed the maximum
++     * allowed size.
++     *
++     * @param si the shortcut to sanitize.
++     * @return the sanitized shortcut (may be trimmed).
++     */
++    private ShortcutInfo sanitizeShortcutSize(ShortcutInfo si) {
++        if (si == null) {
++            return null;
++        }
++        final Parcel p = Parcel.obtain();
++        try {
++            ShortcutInfo result = sanitizeShortcutSize(si, p);
++            if (result == null) {
++                Slog.w(TAG, "Shortcut ID=" + si.getId()
++                        + " size is " + p.dataSize() + " B, which exceeds the limit of "
++                        + MAX_SHORTCUT_TOTAL_SIZE_BYTES + " B and could not be trimmed. Dropping it.");
++            }
++            return result;
++        } finally {
++            p.recycle();
++        }
++    }
++
++    /**
++     * Sanitizes the parcelled size of a {@link ShortcutInfo} does not exceed the maximum allowed
++     * size.
++     *
++     * @param si the shortcut to sanitize.
++     * @param parcel the parcel to use for sanitization.
++     */
++    private boolean isWithinMaxSize(ShortcutInfo si, Parcel parcel) {
++        parcel.setDataSize(0);
++        si.writeToParcel(parcel, 0);
++        return parcel.dataSize() <= MAX_SHORTCUT_TOTAL_SIZE_BYTES;
++    }
++
++    private ShortcutInfo sanitizeShortcutSize(ShortcutInfo si, Parcel parcel) {
++        if (si == null) {
++            return null;
++        }
++        if (isWithinMaxSize(si, parcel)) {
++            return si; // Already valid.
++        }
++        ShortcutInfo trimmed = tryTrimShortcut(si, parcel);
++
++        if (isWithinMaxSize(trimmed, parcel)) {
++            return trimmed;
++        }
++        return null;
++    }
++
+     private List<ShortcutInfo> setReturnedByServer(List<ShortcutInfo> shortcuts) {
+         for (int i = shortcuts.size() - 1; i >= 0; i--) {
+             shortcuts.get(i).setReturnedByServer();
+@@ -2097,6 +2185,52 @@ public class ShortcutService extends IShortcutService.Stub {
+         return shortcuts;
+     }
+ 
++    /**
++     * Attempts to trim the shortcut to fit within the maximum allowed size.
++     *
++     * @param si the shortcut to trim.
++     * @return the trimmed shortcut, or null if the shortcut could not be trimmed.
++     */
++    private ShortcutInfo tryTrimShortcut(ShortcutInfo si, Parcel parcel) {
++        ShortcutInfo current = si;
++
++        // 1. Trim Persons array to MAX_TRIMMED_PERSONS, to get the size down.
++        Person[] persons = current.getPersons();
++        if (persons != null && persons.length > MAX_TRIMMED_PERSONS) {
++            current = new ShortcutInfo(current);
++            current.setPersons(Arrays.copyOf(persons, MAX_TRIMMED_PERSONS));
++
++            // Check if this trim was enough.
++            if (isWithinMaxSize(current, parcel)) return current;
++        }
++
++        // 2. Trim Extras (Clear PersistableBundle).
++        // If still too large, or if Persons wasn't the issue, clear Extras.
++        PersistableBundle extras = current.getExtras();
++        if (extras != null && !extras.isEmpty()) {
++            current = new ShortcutInfo(current);
++            current.setExtras(new PersistableBundle());
++
++            // Check if this trim was enough.
++            if (isWithinMaxSize(current, parcel)) return current;
++        }
++
++        // 3. Remove all persons.
++        // If still too large, try removing persons entirely.
++        // Use current.getPersons() because it might have been trimmed in step 1.
++        Person[] currentPersons = current.getPersons();
++        if (currentPersons != null && currentPersons.length > 0) {
++            current = new ShortcutInfo(current);
++            current.setPersons(null);
++
++            // Check if this trim was enough.
++            if (isWithinMaxSize(current, parcel)) return current;
++        }
++
++        // Return the trimmed version (caller will check if it's still too large).
++        return current;
++    }
++
+     // === APIs ===
+ 
+     @Override
+@@ -2113,6 +2247,7 @@ public class ShortcutService extends IShortcutService.Stub {
+         final List<ShortcutInfo> newShortcuts =
+                 (List<ShortcutInfo>) shortcutInfoList.getList();
+         verifyShortcutInfoPackages(packageName, newShortcuts);
++        sanitizeShortcutSizes(newShortcuts);
+         final int size = newShortcuts.size();
+ 
+         List<ShortcutInfo> changedShortcuts = null;
+@@ -2183,6 +2318,7 @@ public class ShortcutService extends IShortcutService.Stub {
+         final List<ShortcutInfo> newShortcuts =
+                 (List<ShortcutInfo>) shortcutInfoList.getList();
+         verifyShortcutInfoPackages(packageName, newShortcuts);
++        sanitizeShortcutSizes(newShortcuts);
+         final int size = newShortcuts.size();
+ 
+         final List<ShortcutInfo> changedShortcuts = new ArrayList<>(1);
+@@ -2287,6 +2423,7 @@ public class ShortcutService extends IShortcutService.Stub {
+         final List<ShortcutInfo> newShortcuts =
+                 (List<ShortcutInfo>) shortcutInfoList.getList();
+         verifyShortcutInfoPackages(packageName, newShortcuts);
++        sanitizeShortcutSizes(newShortcuts);
+         final int size = newShortcuts.size();
+ 
+         List<ShortcutInfo> changedShortcuts = null;
+@@ -2344,6 +2481,10 @@ public class ShortcutService extends IShortcutService.Stub {
+             @UserIdInt int userId) {
+         verifyCaller(packageName, userId);
+         verifyShortcutInfoPackage(packageName, shortcut);
++        shortcut = sanitizeShortcutSize(shortcut);
++        if (shortcut == null) {
++            return;
++        }
+ 
+         if (isPackageAppLockEnabled(packageName, userId)) {
+             return;
+diff --git a/services/tests/servicestests/src/com/android/server/pm/BaseShortcutManagerTest.java b/services/tests/servicestests/src/com/android/server/pm/BaseShortcutManagerTest.java
+index fa22d42db9e6..95f53821f347 100644
+--- a/services/tests/servicestests/src/com/android/server/pm/BaseShortcutManagerTest.java
++++ b/services/tests/servicestests/src/com/android/server/pm/BaseShortcutManagerTest.java
+@@ -210,11 +210,35 @@ public abstract class BaseShortcutManagerTest {
+             return this;
+         }
+ 
++        public class PackageContext extends BaseContext {
++            private final String mPackageName;
++            private final UserHandle mUser;
++
++            public PackageContext(String packageName, UserHandle user) {
++                mPackageName = packageName;
++                mUser = user;
++            }
++
++            @Override
++            public String getPackageName() {
++                return mPackageName;
++            }
++
++            @Override
++            public int getUserId() {
++                return mUser.getIdentifier();
++            }
++
++            @Override
++            public UserHandle getUser() {
++                return mUser;
++            }
++        }
++
+         @Override
+         public Context createPackageContextAsUser(String packageName, int flags, UserHandle user)
+                 throws PackageManager.NameNotFoundException {
+-            // ignore.
+-            return this;
++            return new PackageContext(packageName, user);
+         }
+ 
+         @Override
+diff --git a/services/tests/servicestests/src/com/android/server/pm/ShortcutManagerTest2.java b/services/tests/servicestests/src/com/android/server/pm/ShortcutManagerTest2.java
+index 45dd3d33baac..b5f0e352afa5 100644
+--- a/services/tests/servicestests/src/com/android/server/pm/ShortcutManagerTest2.java
++++ b/services/tests/servicestests/src/com/android/server/pm/ShortcutManagerTest2.java
+@@ -98,7 +98,7 @@ public class ShortcutManagerTest2 extends BaseShortcutManagerTest {
+         assertExpectException(
+                 RuntimeException.class,
+                 "id cannot be empty",
+-                () -> new ShortcutInfo.Builder(getTestContext(), null));
++                () -> new ShortcutInfo.Builder(getTestContext(), (String) null));
+ 
+         assertExpectException(
+                 RuntimeException.class,
+diff --git a/services/tests/servicestests/src/com/android/server/pm/ShortcutSizeValidationTest.java b/services/tests/servicestests/src/com/android/server/pm/ShortcutSizeValidationTest.java
+new file mode 100644
+index 000000000000..646a4bb55c6a
+--- /dev/null
++++ b/services/tests/servicestests/src/com/android/server/pm/ShortcutSizeValidationTest.java
+@@ -0,0 +1,264 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package com.android.server.pm;
++
++import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.assertExpectException;
++import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.assertShortcutIds;
++import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.findShortcut;
++import static com.android.server.pm.shortcutmanagertest.ShortcutManagerTestUtils.list;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import android.app.Person;
++import android.content.Intent;
++import android.content.pm.ShortcutInfo;
++import android.os.PersistableBundle;
++import androidx.test.filters.SmallTest;
++
++import org.junit.Test;
++
++import java.util.Arrays;
++import java.util.List;
++
++@SmallTest
++public class ShortcutSizeValidationTest extends BaseShortcutManagerTest {
++
++    private String repeat(char c, int count) {
++        char[] arr = new char[count];
++        Arrays.fill(arr, c);
++        return new String(arr);
++    }
++
++    private Person[] createPersons(int count, int nameLength) {
++        Person[] persons = new Person[count];
++        for (int i = 0; i < count; i++) {
++            persons[i] = new Person.Builder()
++                    .setName(repeat('p', nameLength))
++                    .setKey("person_key_" + i)
++                    .build();
++        }
++        return persons;
++    }
++
++    private ShortcutInfo.Builder makeBuilder(String id) {
++        return new ShortcutInfo.Builder(mClientContext, id)
++                .setShortLabel("Label-" + id)
++                .setIntent(makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class));
++    }
++
++
++    @Test
++    public void testPushDynamicShortcut_oversizedAndUntrimmable_dropsSilently() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // Intent with 35KB extra -> ~35KB total size.
++            // Intent extras are not trimmable, so this cannot be trimmed under 32KB.
++            Intent intent = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intent.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo si = makeBuilder("untrimmable")
++                    .setIntent(intent)
++                    .build();
++
++            // Pushing the untrimmable shortcut should not crash, but it should not be published.
++            mManager.pushDynamicShortcut(si);
++
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            // Should be empty (shortcut was dropped).
++            assertTrue(active == null || active.isEmpty());
++        });
++    }
++
++    @Test
++    public void testPushDynamicShortcut_oversizedAndTrimmablePersons_succeedsWithTrim() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // 25 Persons, each with 1.5KB name -> ~37KB total size.
++            // Trimming to 20 persons -> ~30KB total size (under 32KB).
++            // This should succeed.
++            ShortcutInfo si = makeBuilder("trimmable_persons")
++                    .setPersons(createPersons(25, 1500))
++                    .build();
++
++            mManager.pushDynamicShortcut(si);
++
++            // Verify it was published and trimmed to 20 persons
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertShortcutIds(active, "trimmable_persons");
++            ShortcutInfo published = findShortcut(active, "trimmable_persons");
++            assertNotNull(published);
++            assertNotNull(published.getPersons());
++            assertEquals(20, published.getPersons().length);
++        });
++    }
++
++    @Test
++    public void testPushDynamicShortcut_oversizedAndTrimmableExtras_succeedsWithTrim() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // Normal size persons (5 persons * 1KB = 5KB).
++            // Large extras (30KB) -> ~35KB total size.
++            // Trimming persons to 20 does nothing (already 5).
++            // Trimming extras clears them -> ~5KB total size (under 32KB).
++            // This should succeed, but extras should be cleared.
++            PersistableBundle extras = new PersistableBundle();
++            extras.putString("large_key", repeat('e', 30000));
++
++            ShortcutInfo si = makeBuilder("trimmable_extras")
++                    .setPersons(createPersons(5, 1000))
++                    .setExtras(extras)
++                    .build();
++
++            mManager.pushDynamicShortcut(si);
++
++            // Verify it was published, persons are intact (5), but extras are cleared (empty)
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertShortcutIds(active, "trimmable_extras");
++            ShortcutInfo published = findShortcut(active, "trimmable_extras");
++            assertNotNull(published);
++            assertNotNull(published.getPersons());
++            assertEquals(5, published.getPersons().length);
++
++            PersistableBundle publishedExtras = published.getExtras();
++            assertTrue(publishedExtras == null || publishedExtras.isEmpty());
++        });
++    }
++
++    @Test
++    public void testBulkApi_dropsOversizedAndPublishesValid() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // s1: Normal shortcut (~1KB)
++            ShortcutInfo s1 = makeShortcut("s1");
++
++            // s2: Oversized and untrimmable (~35KB)
++            Intent intentS2 = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intentS2.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo s2 = makeBuilder("s2")
++                    .setIntent(intentS2)
++                    .build();
++
++            // s3: Oversized but trimmable (25 persons * 1.5KB = ~37KB, trims to 20 * 1.5KB = ~30KB)
++            ShortcutInfo s3 = makeBuilder("s3")
++                    .setPersons(createPersons(25, 1500))
++                    .build();
++
++            // Call addDynamicShortcuts with all three
++            assertTrue(mManager.addDynamicShortcuts(list(s1, s2, s3)));
++
++            // Verify:
++            // - s1 is published
++            // - s2 is NOT published (dropped)
++            // - s3 is published (trimmed)
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertShortcutIds(active, "s1", "s3");
++
++            ShortcutInfo publishedS3 = findShortcut(active, "s3");
++            assertNotNull(publishedS3);
++            assertEquals(20, publishedS3.getPersons().length);
++        });
++    }
++
++    @Test
++    public void testBulkApi_allOversizedAndDropped_succeedsSilently() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // s1 & s2: Both oversized and untrimmable
++            Intent intentS1 = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intentS1.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo s1 = makeBuilder("s1")
++                    .setIntent(intentS1)
++                    .build();
++
++            Intent intentS2 = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intentS2.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo s2 = makeBuilder("s2")
++                    .setIntent(intentS2)
++                    .build();
++
++            // Calling addDynamicShortcuts should return true (success)
++            assertTrue(mManager.addDynamicShortcuts(list(s1, s2)));
++
++            // Verify both shortcuts were dropped (list is empty)
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertTrue(active == null || active.isEmpty());
++        });
++    }
++
++    @Test
++    public void testSetDynamicShortcuts_handlesSizeValidation() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            ShortcutInfo s1 = makeShortcut("s1");
++            Intent intentS2 = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intentS2.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo s2 = makeBuilder("s2")
++                    .setIntent(intentS2)
++                    .build();
++            ShortcutInfo s3 = makeBuilder("s3")
++                    .setPersons(createPersons(25, 1500))
++                    .build();
++
++            assertTrue(mManager.setDynamicShortcuts(list(s1, s2, s3)));
++
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertShortcutIds(active, "s1", "s3");
++        });
++    }
++
++    @Test
++    public void testUpdateShortcuts_handlesSizeValidation() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            // First publish valid s1 and s3
++            ShortcutInfo s1 = makeShortcut("s1");
++            ShortcutInfo s3 = makeShortcut("s3");
++            assertTrue(mManager.addDynamicShortcuts(list(s1, s3)));
++
++            // Now update them:
++            // - Update s1 to be oversized and untrimmable
++            // - Update s3 to be oversized but trimmable
++            Intent intentU1 = makeIntent(Intent.ACTION_VIEW, ShortcutActivity.class);
++            intentU1.putExtra("large_extra", repeat('e', 35000));
++            ShortcutInfo u1 = makeBuilder("s1") // same ID to update
++                    .setIntent(intentU1)
++                    .build();
++
++            ShortcutInfo u3 = makeBuilder("s3") // same ID to update
++                    .setPersons(createPersons(25, 1500))
++                    .build();
++
++            assertTrue(mManager.updateShortcuts(list(u1, u3)));
++
++            // Verify:
++            // - s1 should NOT be updated (the update is dropped, so it remains in its original
++            //   state)
++            // - s3 should be updated and trimmed.
++            List<ShortcutInfo> active = mManager.getDynamicShortcuts();
++            assertShortcutIds(active, "s1", "s3");
++
++            ShortcutInfo publishedS1 = findShortcut(active, "s1");
++            assertNotNull(publishedS1);
++            // Original s1 didn't have persons
++            assertTrue(publishedS1.getPersons() == null || publishedS1.getPersons().length == 0);
++
++            ShortcutInfo publishedS3 = findShortcut(active, "s3");
++            assertNotNull(publishedS3);
++            assertEquals(20, publishedS3.getPersons().length);
++        });
++    }
++
++    @Test
++    public void testPushDynamicShortcut_nullShortcut_ignoredWithoutCrash() {
++        runWithCaller(CALLING_PACKAGE_1, USER_10, () -> {
++            mService.pushDynamicShortcut(CALLING_PACKAGE_1, null, USER_10);
++        });
++    }
++}
+-- 
+2.55.0
+

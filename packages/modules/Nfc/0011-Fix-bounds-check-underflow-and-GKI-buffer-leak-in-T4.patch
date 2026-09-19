@@ -1,0 +1,65 @@
+From 29b27467d1643e101f3e9e23276867acaa12ad9f Mon Sep 17 00:00:00 2001
+From: Kyle Hsiao <kylehsiao@google.com>
+Date: Fri, 24 Apr 2026 03:31:02 -0700
+Subject: [PATCH 11/13] Fix bounds check underflow and GKI buffer leak in T4T
+ write
+
+Add checks to ensure that p_t4t->max_update_size is larger than the
+data_header size before calculating data_length. This prevents a potential underflow when the maximum update size is insufficient for the ODO/DDO header. Additionally, ensure that the allocated C-APDU buffer (p_c_apdu) is freed via GKI_freebuf(p_c_apdu) before returning false on these new safety check paths in rw_t4t_set_ber_tlv() to prevent GKI buffer memory leaks.
+
+Bug: 498891727
+Bug: 508389525
+Test: Manual
+Flag: EXEMPT BUGFIX
+(cherry picked from commit 91208e26395b1ac6ffb38e5d1bb9abf366ed8134)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:6f500e02dda2ca267224403bbf84967f2063e9b7
+Merged-In: Ia2fb76f73a5f3e99476922101a43d3d8b0505214
+Change-Id: Ia2fb76f73a5f3e99476922101a43d3d8b0505214
+---
+ libnfc-nci/src/nfc/tags/rw_t4t.cc | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/libnfc-nci/src/nfc/tags/rw_t4t.cc b/libnfc-nci/src/nfc/tags/rw_t4t.cc
+index 2464152..e1fdb49 100644
+--- a/libnfc-nci/src/nfc/tags/rw_t4t.cc
++++ b/libnfc-nci/src/nfc/tags/rw_t4t.cc
+@@ -234,6 +234,11 @@ static bool rw_t4t_set_ber_tlv(NFC_HDR* p_c_apdu, uint8_t* p, uint32_t length) {
+     } else {
+       /* Realign with MLc (taking into account header now) */
+       length = p_t4t->max_update_size;
++      if (p_t4t->max_update_size <= data_header) {
++        LOG(ERROR) << StringPrintf(
++            "%s: max_update_size too small for ODO/DDO header", __func__);
++        return false;
++      }
+       data_length = p_t4t->max_update_size - data_header;
+     }
+   } else {
+@@ -242,6 +247,11 @@ static bool rw_t4t_set_ber_tlv(NFC_HDR* p_c_apdu, uint8_t* p, uint32_t length) {
+     } else {
+       /* Realign with MLc (taking into account header now) */
+       length = p_t4t->max_update_size;
++      if (p_t4t->max_update_size <= data_header) {
++        LOG(ERROR) << StringPrintf(
++            "%s: max_update_size too small for ODO/DDO header", __func__);
++        return false;
++      }
+       data_length = p_t4t->max_update_size - data_header;
+     }
+   }
+@@ -1125,7 +1135,11 @@ static bool rw_t4t_update_file(void) {
+       LOG(VERBOSE) << StringPrintf(
+           "%s: MV 3.0 detected, update NDEF Message size > 0x7FFF", __func__);
+ 
+-      return rw_t4t_set_ber_tlv(p_c_apdu, p, length);
++      if (!rw_t4t_set_ber_tlv(p_c_apdu, p, length)) {
++        GKI_freebuf(p_c_apdu);
++        return false;
++      }
++      return true;
+ 
+     } else {
+       LOG(ERROR) << StringPrintf("%s: Cannot write above 0x7FFF for MV2.0",
+-- 
+2.55.0
+

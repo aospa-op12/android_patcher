@@ -1,0 +1,318 @@
+From 89f2e50c0c2b75d9eeb6bf56e9ca3d2da26261c6 Mon Sep 17 00:00:00 2001
+From: Michael Mikhail <michaelmikhil@google.com>
+Date: Thu, 23 Apr 2026 23:15:52 +0000
+Subject: [PATCH 34/49] Update host visibility whenever lockscreen state
+ changes
+
+Flag: EXEMPT BUGFIX
+Bug: 478725173
+Test: atest KeyguardMediaControllerTest
+Test: atest MediaCarouselControllerTest
+(cherry picked from commit f0b9a17ddc990000d37ee188efe7f729c59a488d)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:cf7776ba1db241f352ab87b5b1e4ee4f7c60df48
+Merged-In: If1f6535574bfb3840705ab751976e61cadab01d6
+Change-Id: If1f6535574bfb3840705ab751976e61cadab01d6
+---
+ .../controller/KeyguardMediaControllerTest.kt | 39 ++++++++++++++++
+ .../ui/controller/KeyguardMediaController.kt  | 46 ++++++++++++++++++-
+ .../ui/controller/MediaCarouselController.kt  | 36 ++++++---------
+ 3 files changed, 99 insertions(+), 22 deletions(-)
+
+diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaControllerTest.kt b/packages/SystemUI/multivalentTests/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaControllerTest.kt
+index 506106155bde..5b295a0efa92 100644
+--- a/packages/SystemUI/multivalentTests/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaControllerTest.kt
++++ b/packages/SystemUI/multivalentTests/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaControllerTest.kt
+@@ -33,6 +33,7 @@ import com.android.systemui.integration.SystemUiIntegrationTest
+ import com.android.systemui.keyguard.data.repository.fakeKeyguardTransitionRepository
+ import com.android.systemui.keyguard.shared.model.KeyguardState
+ import com.android.systemui.kosmos.applicationCoroutineScope
++import com.android.systemui.kosmos.testDispatcher
+ import com.android.systemui.kosmos.testScope
+ import com.android.systemui.media.controls.domain.pipeline.interactor.mediaCarouselInteractor
+ import com.android.systemui.media.controls.ui.view.MediaHost
+@@ -55,6 +56,8 @@ import com.android.systemui.util.mockito.whenever
+ import com.android.systemui.util.settings.fakeSettings
+ import com.google.common.truth.Truth.assertThat
+ import junit.framework.Assert.assertTrue
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.test.runCurrent
+ import kotlinx.coroutines.test.runTest
+ import org.junit.Before
+ import org.junit.Rule
+@@ -66,6 +69,7 @@ import org.mockito.Mockito.doAnswer
+ import org.mockito.Mockito.verify
+ import org.mockito.junit.MockitoJUnit
+ 
++@OptIn(ExperimentalCoroutinesApi::class)
+ @SmallTest
+ @SystemUiIntegrationTest
+ @RunWith(AndroidJUnit4::class)
+@@ -85,6 +89,7 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
+     private val mediaFalsingSystem = kosmos.mediaFalsingSystem
+     private val mediaViewModelFactory = kosmos.mediaViewModelFactory
+     private val transitionRepository = kosmos.fakeKeyguardTransitionRepository
++    private val secureSettings = kosmos.fakeSettings
+     private val mediaContainerView: MediaContainerView = MediaContainerView(context, null)
+     private val hostView = UniqueObjectHostView(context)
+     private lateinit var keyguardMediaController: KeyguardMediaController
+@@ -112,6 +117,7 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
+             KeyguardMediaController(
+                 mediaHost,
+                 kosmos.applicationCoroutineScope,
++                kosmos.testDispatcher,
+                 bypassController,
+                 statusBarStateController,
+                 context,
+@@ -122,6 +128,7 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
+                 mediaViewModelFactory,
+                 kosmos.mediaCarouselInteractor,
+                 mediaFalsingSystem,
++                kosmos.fakeSettings,
+             )
+         keyguardMediaController.attachSinglePaneContainer(mediaContainerView)
+         keyguardMediaController.useSplitShade = false
+@@ -257,6 +264,38 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
+         assertThat(mediaContainerView.visibility).isEqualTo(VISIBLE)
+     }
+ 
++    @Test
++    fun keyguardShowing_notAllowedOnLockscreen_viewIsHidden() {
++        kosmos.testScope.runTest {
++            val settingsJob =
++                keyguardMediaController.listenForLockscreenSettingChanges(
++                    kosmos.applicationCoroutineScope
++                )
++            secureSettings.putBool(Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN, false)
++            runCurrent()
++
++            assertThat(mediaContainerView.visibility).isEqualTo(GONE)
++
++            settingsJob.cancel()
++        }
++    }
++
++    @Test
++    fun keyguardShowing_allowedOnLockscreen_viewIsVisible() {
++        kosmos.testScope.runTest {
++            val settingsJob =
++                keyguardMediaController.listenForLockscreenSettingChanges(
++                    kosmos.applicationCoroutineScope
++                )
++            secureSettings.putBool(Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN, true)
++            runCurrent()
++
++            assertThat(mediaContainerView.visibility).isEqualTo(VISIBLE)
++
++            settingsJob.cancel()
++        }
++    }
++
+     private fun setDozing() {
+         whenever(statusBarStateController.isDozing).thenReturn(true)
+         statusBarStateListener.onDozingChanged(true)
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaController.kt b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaController.kt
+index 0e9b9a91937b..305c1e8c5db9 100644
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaController.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/KeyguardMediaController.kt
+@@ -18,6 +18,8 @@ package com.android.systemui.media.controls.ui.controller
+ 
+ import android.content.Context
+ import android.content.res.Configuration
++import android.os.UserHandle
++import android.provider.Settings
+ import android.util.MathUtils
+ import android.view.View
+ import android.view.ViewGroup
+@@ -37,6 +39,7 @@ import com.android.systemui.Dumpable
+ import com.android.systemui.classifier.Classifier
+ import com.android.systemui.dagger.SysUISingleton
+ import com.android.systemui.dagger.qualifiers.Application
++import com.android.systemui.dagger.qualifiers.Background
+ import com.android.systemui.dump.DumpManager
+ import com.android.systemui.initOnBackPressedDispatcherOwner
+ import com.android.systemui.lifecycle.repeatWhenAttached
+@@ -64,13 +67,23 @@ import com.android.systemui.statusbar.policy.SplitShadeStateController
+ import com.android.systemui.util.asIndenting
+ import com.android.systemui.util.boundsOnScreen
+ import com.android.systemui.util.println
++import com.android.systemui.util.settings.SecureSettings
++import com.android.systemui.util.settings.SettingsProxyExt.observerFlow
+ import com.android.systemui.util.withIncreasedIndent
+ import java.io.PrintWriter
+ import javax.inject.Inject
+ import javax.inject.Named
++import kotlinx.coroutines.CoroutineDispatcher
+ import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.flow.collectLatest
+ import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.flow.distinctUntilChanged
++import kotlinx.coroutines.flow.flowOn
++import kotlinx.coroutines.flow.map
++import kotlinx.coroutines.flow.onStart
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ 
+ /**
+  * Controls the media notifications on the lock screen, handles its visibility and placement -
+@@ -82,6 +95,7 @@ class KeyguardMediaController
+ constructor(
+     @param:Named(MediaModule.KEYGUARD) private val mediaHost: MediaHost,
+     @Application private val applicationScope: CoroutineScope,
++    @param:Background private val backgroundDispatcher: CoroutineDispatcher,
+     private val bypassController: KeyguardBypassController,
+     private val statusBarStateController: SysuiStatusBarStateController,
+     @ShadeDisplayAware private val context: Context,
+@@ -92,6 +106,7 @@ constructor(
+     private val mediaViewModelFactory: MediaViewModel.Factory,
+     private val mediaCarouselInteractor: MediaCarouselInteractor,
+     private val falsingSystem: MediaFalsingSystem,
++    private val secureSettings: SecureSettings,
+ ) : Dumpable {
+     private var lastUsedStatusBarState = -1
+ 
+@@ -114,6 +129,7 @@ constructor(
+             }
+         }
+ 
++    private var allowMediaPlayerOnLockScreen = true
+     private val _isMediaVisibleOnLockscreen = mutableStateOf(false)
+     private var isMediaVisibleOnLockscreen: Boolean
+         get() = _isMediaVisibleOnLockscreen.value
+@@ -138,6 +154,7 @@ constructor(
+ 
+             // Let's now initialize this view, which also creates the host view for us.
+             mediaHost.init(MediaHierarchyManager.LOCATION_LOCKSCREEN)
++            listenForLockscreenSettingChanges(applicationScope)
+         } else {
+             applicationScope.launch {
+                 combine(
+@@ -201,6 +218,33 @@ constructor(
+         }
+     }
+ 
++    @VisibleForTesting
++    fun listenForLockscreenSettingChanges(scope: CoroutineScope): Job {
++        return scope.launch {
++            secureSettings
++                .observerFlow(UserHandle.USER_ALL, Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN)
++                // query to get initial value
++                .onStart { emit(Unit) }
++                .map { getMediaLockScreenSetting() }
++                .distinctUntilChanged()
++                .flowOn(backgroundDispatcher)
++                .collectLatest {
++                    allowMediaPlayerOnLockScreen = it
++                    onMediaHostVisibilityChanged(mediaHost.visible)
++                }
++        }
++    }
++
++    private suspend fun getMediaLockScreenSetting(): Boolean {
++        return withContext(backgroundDispatcher) {
++            secureSettings.getBoolForUser(
++                Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN,
++                true,
++                UserHandle.USER_CURRENT,
++            )
++        }
++    }
++
+     private fun updateResources() {
+         distanceForFullShadeTransition =
+             context.resources.getDimensionPixelSize(
+@@ -330,7 +374,7 @@ constructor(
+             if (MediaControlsInComposeFlag.isEnabled) {
+                 isMediaVisibleOnLockscreen
+             } else {
+-                mediaHost.visible
++                mediaHost.visible && allowMediaPlayerOnLockScreen
+             }
+         val isBypassNotEnabled = !bypassController.bypassEnabled
+         val useSplitShade = useSplitShade
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaCarouselController.kt b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaCarouselController.kt
+index 5799e8886bd6..b3b7b027bbf3 100644
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaCarouselController.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaCarouselController.kt
+@@ -36,9 +36,6 @@ import android.view.animation.PathInterpolator
+ import android.widget.ImageView
+ import android.widget.LinearLayout
+ import androidx.annotation.VisibleForTesting
+-import androidx.lifecycle.Lifecycle
+-import androidx.lifecycle.repeatOnLifecycle
+-import com.android.app.tracing.coroutines.launchTraced as launch
+ import com.android.app.tracing.traceSection
+ import com.android.keyguard.KeyguardUpdateMonitor
+ import com.android.keyguard.KeyguardUpdateMonitorCallback
+@@ -56,7 +53,6 @@ import com.android.systemui.keyguard.shared.model.KeyguardState.DOZING
+ import com.android.systemui.keyguard.shared.model.KeyguardState.GONE
+ import com.android.systemui.keyguard.shared.model.KeyguardState.LOCKSCREEN
+ import com.android.systemui.keyguard.shared.model.TransitionState
+-import com.android.systemui.lifecycle.repeatWhenAttached
+ import com.android.systemui.media.controls.domain.pipeline.MediaDataManager
+ import com.android.systemui.media.controls.shared.model.MediaData
+ import com.android.systemui.media.controls.ui.controller.MediaPlayerData.visiblePlayerKeys
+@@ -103,6 +99,7 @@ import kotlinx.coroutines.flow.flowOn
+ import kotlinx.coroutines.flow.map
+ import kotlinx.coroutines.flow.onStart
+ import kotlinx.coroutines.flow.stateIn
++import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+ 
+ private const val TAG = "MediaCarouselController"
+@@ -452,12 +449,9 @@ constructor(
+             }
+         )
+         keyguardUpdateMonitor.registerCallback(keyguardUpdateMonitorCallback)
+-        mediaCarousel.repeatWhenAttached {
+-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+-                listenForAnyStateToLockscreenTransition(this)
+-                listenForAnyStateToDozingTransition(this)
+-            }
+-        }
++
++        listenForAnyStateToLockscreenTransition(applicationScope)
++        listenForAnyStateToDozingTransition(applicationScope)
+         listenForAnyStateToGoneKeyguardTransition(applicationScope)
+         listenForLockscreenSettingChanges(applicationScope)
+ 
+@@ -510,10 +504,13 @@ constructor(
+         return scope.launch {
+             keyguardTransitionInteractor
+                 .isFinishedIn(content = Scenes.Gone, stateWithoutSceneContainer = GONE)
+-                .filter { it }
+-                .collect {
+-                    showMediaCarousel()
+-                    updateHostVisibility()
++                .collect { isOnGone ->
++                    if (isOnGone) {
++                        showMediaCarousel()
++                        updateHostVisibility()
++                    } else if (!allowMediaPlayerOnLockScreen) {
++                        updateHostVisibility()
++                    }
+                 }
+         }
+     }
+@@ -552,14 +549,11 @@ constructor(
+     @VisibleForTesting
+     internal fun listenForAnyStateToDozingTransition(scope: CoroutineScope): Job {
+         return scope.launch {
+-            keyguardTransitionInteractor
+-                .transition(Edge.create(to = DOZING))
+-                .filter { it.transitionState == TransitionState.FINISHED }
+-                .collect {
+-                    if (!allowMediaPlayerOnLockScreen) {
+-                        updateHostVisibility()
+-                    }
++            keyguardTransitionInteractor.isInTransition(Edge.create(to = DOZING)).collect {
++                if (!allowMediaPlayerOnLockScreen) {
++                    updateHostVisibility()
+                 }
++            }
+         }
+     }
+ 
+-- 
+2.55.0
+

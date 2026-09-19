@@ -1,0 +1,170 @@
+From 5baee817f03a7cbd59d8e09d552e5f6fcc59dfe8 Mon Sep 17 00:00:00 2001
+From: Tyler Gunn <tgunn@google.com>
+Date: Fri, 29 May 2026 00:23:07 +0000
+Subject: [PATCH 3/4] Fix MMI check bypass via leading whitespace in tel URI.
+
+- Ensure we use the number extracted from getNumberFromCallIntent which
+does a bunch of correctness checks already.
+- Add a second line of defense in MmiUtils to ensure the number
+is in the correct format.
+
+Flag: EXEMPT BUGFIX
+Test: atest MmiUtilsTest NewOutgoingCallIntentBroadcasterTest
+Bug: 508585261
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:69b76bafc858e83320af18672a466ebf81699922
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:55e32178cf94811dd26b67d6f2d7706e094ceea6
+Merged-In: I6618e86cb817e14eefdcb540e25a22764e83751e
+Change-Id: I6618e86cb817e14eefdcb540e25a22764e83751e
+---
+ src/com/android/server/telecom/MmiUtils.java  | 23 +++++++++---
+ .../NewOutgoingCallIntentBroadcaster.java     |  4 ++-
+ .../server/telecom/tests/MmiUtilsTest.java    |  6 ++++
+ .../NewOutgoingCallIntentBroadcasterTest.java | 36 ++++++++++++++++++-
+ 4 files changed, 62 insertions(+), 7 deletions(-)
+
+diff --git a/src/com/android/server/telecom/MmiUtils.java b/src/com/android/server/telecom/MmiUtils.java
+index 11f6d59..6d7cd1d 100644
+--- a/src/com/android/server/telecom/MmiUtils.java
++++ b/src/com/android/server/telecom/MmiUtils.java
+@@ -95,6 +95,9 @@ public class MmiUtils {
+     private static boolean isCallForwardingMmiCode(Uri handle) {
+         Matcher m;
+         String dialString = handle.getSchemeSpecificPart();
++        if (dialString != null) {
++            dialString = dialString.trim();
++        }
+         m = sPatternSuppService.matcher(dialString);
+ 
+         if (m.matches()) {
+@@ -119,7 +122,11 @@ public class MmiUtils {
+     private boolean isDangerousVerticalServiceCode(Uri handle) {
+         if (isTelScheme(handle)) {
+             String dialedNumber = handle.getSchemeSpecificPart();
+-            if (dialedNumber.length() >= mMinLenInDangerousSet && dialedNumber.charAt(0) == '*') {
++            if (dialedNumber != null) {
++                dialedNumber = dialedNumber.trim();
++            }
++            if (dialedNumber != null && dialedNumber.length() >= mMinLenInDangerousSet
++                    && dialedNumber.charAt(0) == '*') {
+                 //we only check vertical codes defined by The North American Numbering Plan Admin
+                 //see: https://nationalnanpa.com/number_resource_info/vsc_assignments.html
+                 //only two or 3-digit codes are valid as of today, but the code is generic enough.
+@@ -148,19 +155,25 @@ public class MmiUtils {
+     public boolean isPotentialInCallMMICode(Uri handle) {
+         if (isTelScheme(handle)) {
+             String dialedNumber = handle.getSchemeSpecificPart();
+-            return (dialedNumber.equals("0") ||
++            if (dialedNumber != null) {
++                dialedNumber = dialedNumber.trim();
++            }
++            return (dialedNumber != null && (dialedNumber.equals("0") ||
+                     (dialedNumber.startsWith("1") && dialedNumber.length() <= 2) ||
+                     (dialedNumber.startsWith("2") && dialedNumber.length() <= 2) ||
+                     dialedNumber.equals("3") ||
+                     dialedNumber.equals("4") ||
+-                    dialedNumber.equals("5"));
++                    dialedNumber.equals("5")));
+         }
+         return false;
+     }
+ 
+     public boolean isPotentialMMICode(Uri handle) {
+-        return (handle != null && handle.getSchemeSpecificPart() != null
+-                && handle.getSchemeSpecificPart().contains("#"));
++        if (handle == null || handle.getSchemeSpecificPart() == null) {
++            return false;
++        }
++        String dialString = handle.getSchemeSpecificPart().trim();
++        return dialString.contains("#");
+     }
+ 
+     /**
+diff --git a/src/com/android/server/telecom/NewOutgoingCallIntentBroadcaster.java b/src/com/android/server/telecom/NewOutgoingCallIntentBroadcaster.java
+index 20f2509..eb4f619 100644
+--- a/src/com/android/server/telecom/NewOutgoingCallIntentBroadcaster.java
++++ b/src/com/android/server/telecom/NewOutgoingCallIntentBroadcaster.java
+@@ -209,7 +209,9 @@ public class NewOutgoingCallIntentBroadcaster {
+                     result.callImmediately = true;
+                     result.requestRedirection = false;
+                 }
+-            } else if (mMmiUtils.isDangerousMmiOrVerticalCode(intent.getData())) {
++            } else if (mMmiUtils.isDangerousMmiOrVerticalCode(Uri.fromParts(
++                    handle.getScheme(),
++                    number, null))) {
+                 if (!mIsDefaultOrSystemPhoneApp) {
+                     Log.w(this,
+                             "Potentially dangerous MMI code %s with CALL Intent %s can only be "
+diff --git a/tests/src/com/android/server/telecom/tests/MmiUtilsTest.java b/tests/src/com/android/server/telecom/tests/MmiUtilsTest.java
+index 3f4b5f6..e328a37 100644
+--- a/tests/src/com/android/server/telecom/tests/MmiUtilsTest.java
++++ b/tests/src/com/android/server/telecom/tests/MmiUtilsTest.java
+@@ -56,6 +56,12 @@ public class MmiUtilsTest extends TelecomTestCase {
+         "*721234", // Call Forwarding Activation
+         "*77", // Anonymous Call Rejection Activation
+         "*78", // Do Not Disturb Activation
++
++        // Dial strings with whitespace
++        " *21*1234567#",
++        "*21*1234567# ",
++        "  *67*1234567#  ",
++        " *721234 ",
+     };
+ 
+     private MmiUtils mMmiUtils = new MmiUtils();
+diff --git a/tests/src/com/android/server/telecom/tests/NewOutgoingCallIntentBroadcasterTest.java b/tests/src/com/android/server/telecom/tests/NewOutgoingCallIntentBroadcasterTest.java
+index c95b298..c850a1b 100644
+--- a/tests/src/com/android/server/telecom/tests/NewOutgoingCallIntentBroadcasterTest.java
++++ b/tests/src/com/android/server/telecom/tests/NewOutgoingCallIntentBroadcasterTest.java
+@@ -249,7 +249,7 @@ public class NewOutgoingCallIntentBroadcasterTest extends TelecomTestCase {
+     @Test
+     public void testDangerousMmiCodeWithNonDefaultDialer() {
+         Uri handle = Uri.parse("tel:*21*1234567#");
+-        doReturn(true).when(mMmiUtils).isDangerousMmiOrVerticalCode(handle);
++        doReturn(true).when(mMmiUtils).isDangerousMmiOrVerticalCode(any());
+         Intent intent = new Intent(Intent.ACTION_CALL, handle);
+ 
+         String ui_package_string = "sample_string_1";
+@@ -280,6 +280,40 @@ public class NewOutgoingCallIntentBroadcasterTest extends TelecomTestCase {
+         assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, dialerIntent.getFlags());
+     }
+ 
++    @Test
++    public void testDangerousMmiCodeWithLeadingSpacesAndNonDefaultDialer() {
++        Uri handleWithSpace = Uri.parse("tel: *21*1234567#");
++        doReturn(true).when(mMmiUtils).isDangerousMmiOrVerticalCode(any());
++        Intent intent = new Intent(Intent.ACTION_CALL, handleWithSpace);
++
++        String ui_package_string = "sample_string_1";
++        String dialer_default_class_string = "sample_string_2";
++        int mockConfigDefaultDialer = Resources.getSystem().getIdentifier("config_defaultDialer",
++                "string", "android");
++        mComponentContextFixture.putResource(mockConfigDefaultDialer,
++                ui_package_string);
++        mComponentContextFixture.putResource(R.string.dialer_default_class,
++                dialer_default_class_string);
++        when(mDefaultDialerCache.getSystemDialerApplication()).thenReturn(ui_package_string);
++        when(mDefaultDialerCache.getDialtactsSystemDialerComponent()).thenReturn(
++                new ComponentName(ui_package_string, dialer_default_class_string));
++
++        int result = processIntent(intent, false).disconnectCause;
++
++        assertEquals(DisconnectCause.OUTGOING_CANCELED, result);
++        verifyNoBroadcastSent();
++        verifyNoCallPlaced();
++
++        ArgumentCaptor<Intent> dialerIntentCaptor = ArgumentCaptor.forClass(Intent.class);
++        verify(mContext).startActivityAsUser(dialerIntentCaptor.capture(), any(UserHandle.class));
++        Intent dialerIntent = dialerIntentCaptor.getValue();
++        assertEquals(new ComponentName(ui_package_string, dialer_default_class_string),
++                dialerIntent.getComponent());
++        assertEquals(Intent.ACTION_DIAL, dialerIntent.getAction());
++        assertEquals(handleWithSpace, dialerIntent.getData());
++        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, dialerIntent.getFlags());
++    }
++
+     @Test
+     public void testNonDangerousMmiCodeWithNonDefaultDialer() {
+         Uri handle = Uri.parse("tel:*12*1234567#");
+-- 
+2.55.0
+

@@ -1,0 +1,115 @@
+From 5fe6f1d58cb9d3557f6c9f8152d71f70e6aa098c Mon Sep 17 00:00:00 2001
+From: Nate Jiang <qiangjiang@google.com>
+Date: Wed, 20 May 2026 11:57:25 -0700
+Subject: [PATCH 3/4] Fix NAN frequency list handling in AIDL interfaces.
+
+The changes ensure that frequency lists passed to wpas_nan_* functions
+are properly null-terminated and that the underlying data remains valid
+for the duration of the call. This involves copying frequency lists from
+AIDL structures into local vectors and appending a zero terminator.
+Also, use const references for AIDL struct conversions.
+
+Bug: 512973352
+Test: vts test
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:cff099819cfcf6ae5e165409077e1aabba38f636
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:3d6729633dfb6c3a2aeb22fd796ae9a17fa62632
+Merged-In: I04ab96b2dd6dbdd1e97be3a9e82319add065b991
+Change-Id: I04ab96b2dd6dbdd1e97be3a9e82319add065b991
+---
+ wpa_supplicant/aidl/p2p_iface.cpp | 16 +++++++++++++---
+ wpa_supplicant/aidl/sta_iface.cpp | 22 ++++++++++++++++++++--
+ 2 files changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/wpa_supplicant/aidl/p2p_iface.cpp b/wpa_supplicant/aidl/p2p_iface.cpp
+index 93a4a06..ea954cc 100644
+--- a/wpa_supplicant/aidl/p2p_iface.cpp
++++ b/wpa_supplicant/aidl/p2p_iface.cpp
+@@ -2171,18 +2171,28 @@ P2pIface::startUsdBasedServiceDiscoveryInternal(
+ 	params.ttl = serviceDiscoveryConfig.timeoutInSeconds;
+ 	params.query_period = DEFAULT_QUERY_PERIOD_MS;
+ 	params.freq = NAN_USD_DEFAULT_FREQ;
++	std::vector<int32_t> freqListCopy;
++	int *all_freqs = nullptr;
+ 	if (serviceDiscoveryConfig.bandMask != 0) {
+ 		// TODO convert band to channel instead of scanning all channel frequencies.
+-		params.freq_list = wpas_nan_usd_all_freqs(wpa_s);
++		// This allocates memory that needs to be freed.
++		all_freqs = wpas_nan_usd_all_freqs(wpa_s);
++		params.freq_list = all_freqs;
+ 	} else if (serviceDiscoveryConfig.frequencyListMhz.size() != 0) {
+ 		params.freq = serviceDiscoveryConfig.frequencyListMhz.front();
+-		if (serviceDiscoveryConfig.frequencyListMhz.size() > 1)
+-			params.freq_list = serviceDiscoveryConfig.frequencyListMhz.data() + 1;
++		if (serviceDiscoveryConfig.frequencyListMhz.size() > 1) {
++			freqListCopy.assign(
++				serviceDiscoveryConfig.frequencyListMhz.begin() + 1,
++				serviceDiscoveryConfig.frequencyListMhz.end());
++			freqListCopy.push_back(0);
++			params.freq_list = freqListCopy.data();
++		}
+ 	}
+ 	sessionId = wpas_nan_subscribe(wpa_s, serviceDiscoveryConfig.serviceName.c_str(),
+ 					      (enum nan_service_protocol_type)
+ 						  serviceDiscoveryConfig.serviceProtocolType,
+ 						  service_specific_info, &params, true);
++	os_free(all_freqs);
+ 
+ 	if (sessionId > 0) {
+ 		return {sessionId, ndk::ScopedAStatus::ok()};
+diff --git a/wpa_supplicant/aidl/sta_iface.cpp b/wpa_supplicant/aidl/sta_iface.cpp
+index 8989081..897750a 100644
+--- a/wpa_supplicant/aidl/sta_iface.cpp
++++ b/wpa_supplicant/aidl/sta_iface.cpp
+@@ -405,7 +405,7 @@ bool validateUsdSubscribeConfig(UsdSubscribeConfig subscribeConfig) {
+ 	return true;
+ }
+ 
+-struct nan_publish_params convertAidlNanPublishParamsToInternal(UsdPublishConfig publishConfig) {
++struct nan_publish_params convertAidlNanPublishParamsToInternal(const UsdPublishConfig& publishConfig) {
+ 	struct nan_publish_params nanPublishParams;
+ 	nanPublishParams.unsolicited =
+ 		publishConfig.publishType == UsdPublishConfig::PublishType::UNSOLICITED_ONLY
+@@ -426,7 +426,7 @@ struct nan_publish_params convertAidlNanPublishParamsToInternal(UsdPublishConfig
+ }
+ 
+ struct nan_subscribe_params convertAidlNanSubscribeParamsToInternal(
+-		UsdSubscribeConfig subscribeConfig) {
++		const UsdSubscribeConfig& subscribeConfig) {
+ 	struct nan_subscribe_params nanSubscribeParams;
+ 	nanSubscribeParams.active =
+ 		subscribeConfig.subscribeType == UsdSubscribeConfig::SubscribeType::ACTIVE_MODE;
+@@ -2770,6 +2770,15 @@ ndk::ScopedAStatus StaIface::startUsdPublishInternal(
+ 	struct nan_publish_params nanPublishParams =
+ 		convertAidlNanPublishParamsToInternal(usdPublishConfig);
+ 
++	std::vector<int32_t> freqListCopy;
++	if (!usdPublishConfig.usdBaseConfig.freqsMhz.empty()) {
++		freqListCopy = usdPublishConfig.usdBaseConfig.freqsMhz;
++		freqListCopy.push_back(0);
++		nanPublishParams.freq_list = freqListCopy.data();
++	} else {
++		nanPublishParams.freq_list = nullptr;
++	}
++
+ 	int publishId = wpas_nan_publish(
+ 		wpa_s, usdPublishConfig.usdBaseConfig.serviceName.c_str(),
+ 		convertAidlServiceProtoTypeToInternal(
+@@ -2807,6 +2816,15 @@ ndk::ScopedAStatus StaIface::startUsdSubscribeInternal(
+ 	struct nan_subscribe_params nanSubscribeParams =
+ 		convertAidlNanSubscribeParamsToInternal(usdSubscribeConfig);
+ 
++	std::vector<int32_t> freqListCopy;
++	if (!usdSubscribeConfig.usdBaseConfig.freqsMhz.empty()) {
++		freqListCopy = usdSubscribeConfig.usdBaseConfig.freqsMhz;
++		freqListCopy.push_back(0);
++		nanSubscribeParams.freq_list = freqListCopy.data();
++	} else {
++		nanSubscribeParams.freq_list = nullptr;
++	}
++
+ 	int subscribeId = wpas_nan_subscribe(
+ 		wpa_s, usdSubscribeConfig.usdBaseConfig.serviceName.c_str(),
+ 		convertAidlServiceProtoTypeToInternal(
+-- 
+2.55.0
+

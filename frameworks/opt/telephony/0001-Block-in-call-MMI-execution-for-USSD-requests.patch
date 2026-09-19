@@ -1,0 +1,119 @@
+From 7b4ad4a51c1d2e186459632be30a7634691ebb78 Mon Sep 17 00:00:00 2001
+From: sungcheol ahn <donaldahn@google.com>
+Date: Thu, 18 Jun 2026 14:39:17 +0000
+Subject: [PATCH 1/2] Block in-call MMI execution for USSD requests.
+
+USSD requests (which have a non-null wrappedCallback) should not
+trigger in-call MMI supplementary services (like call hold, swap,
+conference) even if the dial string matches an in-call MMI code.
+
+Add `wrappedCallback == null` check in `dialInternal` for both
+`ImsPhone` and `GsmCdmaPhone` to prevent this execution path.
+
+Bug: 517377154
+Flag: EXEMPT BUGFIX
+Test: atest ImsPhoneTest GsmCdmaPhoneTest
+Test: Live telephony basic test (video/voice in/out call)
+Test: Live USSD test(526407470)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:b41275b0c54708ba582889839b8fa15cd1fd965a
+Merged-In: I1a4adc4d26316fba2204f2b8b7df0f9f17e4d717
+Change-Id: I1a4adc4d26316fba2204f2b8b7df0f9f17e4d717
+---
+ .../internal/telephony/GsmCdmaPhone.java      |  2 +-
+ .../internal/telephony/imsphone/ImsPhone.java |  2 +-
+ .../internal/telephony/GsmCdmaPhoneTest.java  | 20 +++++++++++++++++++
+ .../telephony/imsphone/ImsPhoneTest.java      | 18 +++++++++++++++++
+ 4 files changed, 40 insertions(+), 2 deletions(-)
+
+diff --git a/src/java/com/android/internal/telephony/GsmCdmaPhone.java b/src/java/com/android/internal/telephony/GsmCdmaPhone.java
+index 83ee78da3b..892df55f25 100644
+--- a/src/java/com/android/internal/telephony/GsmCdmaPhone.java
++++ b/src/java/com/android/internal/telephony/GsmCdmaPhone.java
+@@ -1574,7 +1574,7 @@ public class GsmCdmaPhone extends Phone {
+         String newDialString = PhoneNumberUtils.stripSeparators(dialString);
+ 
+         // If not emergency number, handle in-call MMI first if applicable
+-        if (!dialArgs.isEmergency) {
++        if (!dialArgs.isEmergency && wrappedCallback == null) {
+             if (mFeatureFlags.ignoreIncallMmiForEmergency() && isInEmergencyCall()) {
+                 logd("dialInternal: ignore InCall MMI command during emergency call");
+                 return null;
+diff --git a/src/java/com/android/internal/telephony/imsphone/ImsPhone.java b/src/java/com/android/internal/telephony/imsphone/ImsPhone.java
+index afb4138cf8..f3cbd06bb9 100644
+--- a/src/java/com/android/internal/telephony/imsphone/ImsPhone.java
++++ b/src/java/com/android/internal/telephony/imsphone/ImsPhone.java
+@@ -1036,7 +1036,7 @@ public class ImsPhone extends ImsPhoneBase {
+         newDialString = PhoneNumberUtils.stripSeparators(dialString);
+ 
+         // handle in-call MMI first if applicable
+-        if (!dialArgs.isEmergency) {
++        if (!dialArgs.isEmergency && wrappedCallback == null) {
+             if (mFeatureFlags.ignoreIncallMmiForEmergency() && mCT.isInEmergencyCall()) {
+                 logd("dialInternal: ignore InCall MMI command during emergency call");
+                 return null;
+diff --git a/tests/telephonytests/src/com/android/internal/telephony/GsmCdmaPhoneTest.java b/tests/telephonytests/src/com/android/internal/telephony/GsmCdmaPhoneTest.java
+index 9e5c0e2231..3f4ecaed39 100644
+--- a/tests/telephonytests/src/com/android/internal/telephony/GsmCdmaPhoneTest.java
++++ b/tests/telephonytests/src/com/android/internal/telephony/GsmCdmaPhoneTest.java
+@@ -3476,4 +3476,24 @@ public class GsmCdmaPhoneTest extends TelephonyTest {
+         // verify that TelephonyManager.isVoiceCapable() WAS called
+         verify(mTelephonyManager, times(1)).isVoiceCapable();
+     }
++
++    @Test
++    @SmallTest
++    public void testHandleUssdRequestWithInCallMmiCode() throws Exception {
++        replaceInstance(GsmCdmaPhone.class, "mCT", mPhoneUT, mCT);
++        replaceInstance(Phone.class, "mImsPhone", mPhoneUT, null);
++
++        mCT.mForegroundCall = mGsmCdmaCall;
++        mCT.mBackgroundCall = mGsmCdmaCall;
++        mCT.mRingingCall = mGsmCdmaCall;
++        doReturn(GsmCdmaCall.State.INCOMING).when(mGsmCdmaCall).getState();
++
++        android.os.ResultReceiver mockCallback =
++                org.mockito.Mockito.mock(android.os.ResultReceiver.class);
++        boolean handled = mPhoneUT.handleUssdRequest("2", mockCallback);
++
++        assertTrue(handled);
++        // Verify we NEVER triggered GsmCdmaCallTracker.acceptCall
++        verify(mCT, never()).acceptCall();
++    }
+ }
+diff --git a/tests/telephonytests/src/com/android/internal/telephony/imsphone/ImsPhoneTest.java b/tests/telephonytests/src/com/android/internal/telephony/imsphone/ImsPhoneTest.java
+index 3291559841..55a9133790 100644
+--- a/tests/telephonytests/src/com/android/internal/telephony/imsphone/ImsPhoneTest.java
++++ b/tests/telephonytests/src/com/android/internal/telephony/imsphone/ImsPhoneTest.java
+@@ -41,6 +41,7 @@ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertTrue;
++import static org.junit.Assert.fail;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.anyBoolean;
+ import static org.mockito.ArgumentMatchers.anyChar;
+@@ -1896,4 +1897,21 @@ public class ImsPhoneTest extends TelephonyTest {
+         m.obj = AsyncResult.forMessage(m, ss, null);
+         return m;
+     }
++
++    @Test
++    @SmallTest
++    public void testHandleUssdRequestWithInCallMmiCode() throws Exception {
++        doReturn(Call.State.INCOMING).when(mRingingCall).getState();
++        android.os.ResultReceiver mockCallback =
++                org.mockito.Mockito.mock(android.os.ResultReceiver.class);
++        try {
++            mImsPhoneUT.handleUssdRequest("2", mockCallback);
++            fail("Expected CallStateException");
++        } catch (CallStateException e) {
++            assertEquals(Phone.CS_FALLBACK, e.getMessage());
++        }
++        // It should NOT call acceptCall because wrappedCallback is not null
++        verify(mImsCT, never()).acceptCall(anyInt());
++    }
+ }
++
+-- 
+2.55.0
+

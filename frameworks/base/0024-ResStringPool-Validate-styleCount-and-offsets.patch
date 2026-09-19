@@ -1,7 +1,7 @@
-From 2388c6e733ba038583c67d03b8a123505a56e19e Mon Sep 17 00:00:00 2001
+From 1ffad96b63286de5f97f593c662fb80bc39fec7b Mon Sep 17 00:00:00 2001
 From: Jeremy Meyer <jakmcbane@google.com>
 Date: Thu, 21 May 2026 15:46:02 -0700
-Subject: [PATCH 24/27] ResStringPool: Validate styleCount and offsets
+Subject: [PATCH 24/49] ResStringPool: Validate styleCount and offsets
 
 ResStringPool::setTo fails to validate that the style-index array fits
 within the data chunk when stringCount is zero, as it was skipping

@@ -1,7 +1,7 @@
-From 2ce4dcf32b87efdc5c838e4c9ce559fbc1e429ea Mon Sep 17 00:00:00 2001
+From d538c24c642ba93cf6f7301f5a4d185c85f464a0 Mon Sep 17 00:00:00 2001
 From: Milton <mingjuwu@google.com>
 Date: Fri, 15 May 2026 08:25:23 +0000
-Subject: [PATCH 5/5] Sanitize sensitive BiometricsSettingsBase extra
+Subject: [PATCH 5/8] Sanitize sensitive BiometricsSettingsBase extra
 
 External callers launching CombinedBiometricSettingsActivity could
 previously inject arbitrary EXTRA_USER_ID and EXTRA_KEY_GK_PW_HANDLE

@@ -1,7 +1,7 @@
-From 0c174097512c5e53de150a4400fe309572d86a5e Mon Sep 17 00:00:00 2001
+From b53ca32cb325aa05847a9de4e2bcb6ae9e0647aa Mon Sep 17 00:00:00 2001
 From: Mohit kumar <imohit@google.com>
 Date: Mon, 4 May 2026 20:32:16 +0000
-Subject: [PATCH 3/5] RESTRICT AUTOMERGE Fix MediaStore race condition for
+Subject: [PATCH 3/7] RESTRICT AUTOMERGE Fix MediaStore race condition for
  pending files
 
 Resolves a vulnerability where a malicious app could preemptively squat a MediaStore namespace.

@@ -1,7 +1,7 @@
-From f787e328ba0feaf5450ec7eb36a7abce0f0c3c3a Mon Sep 17 00:00:00 2001
+From 47d384a73d7771c55e2dfe2435af01f1c3d6a365 Mon Sep 17 00:00:00 2001
 From: Prabal Singh <prabalsingh@google.com>
 Date: Tue, 19 May 2026 17:31:33 +0000
-Subject: [PATCH 16/27] LauncherApps: Scrub sensitive URIs in install sessions
+Subject: [PATCH 16/49] LauncherApps: Scrub sensitive URIs in install sessions
 
 LauncherApps.getAllPackageInstallerSessions() incorrectly exposed potentially sensitive originatingUri and referrerUri from package install sessions to any application with package visibility to the session owner.
 

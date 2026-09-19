@@ -1,0 +1,624 @@
+From dcb00695a3e3a250db6605c5a7894151b47d7e92 Mon Sep 17 00:00:00 2001
+From: Pranit Rane <pranitrane@google.com>
+Date: Thu, 18 Jun 2026 21:26:29 -0700
+Subject: [PATCH 2/2] TelephonyProvider: Fix SQL injection in projection and
+ sortOrder
+
+Fix SQL injection vulnerability in TelephonyProvider (SmsProvider, MmsProvider, and MmsSmsProvider) which allowed apps with READ_SMS permission to extract sensitive SMS and OTP content.
+
+Remediation details:
+1. Enable strict query validation (setStrict(true)) and strict grammar check (setStrictGrammar(true)) on SQLiteQueryBuilder instances used to handle queries with user-supplied parameters. This protects against parentheses escape injection in selection clauses.
+2. Enhance SqlQueryChecker's blocklist in Java to intercept and reject potentially dangerous SQL keywords (e.g. SELECT, UNION, JOIN) and SQL functions (e.g. HEX, SUBSTR, SQLITE_VERSION) used for data extraction, while allowing standard aggregate functions (e.g. COUNT).
+3. Rename SqlQueryChecker validation methods (e.g. checkQueryParametersForDisallowedTokens) to reflect the generic blocklist covering functions and keywords.
+4. Add SqlQueryCheckerTest.java unit tests to verify the validation rules.
+5. Add validation unit tests in MmsProviderTest and MmsSmsProviderTest to verify subquery block behavior under restricted access.
+
+Bug: 494725584
+Flag: EXEMPT BUGFIX
+Test: atest CtsTelephonyProviderTestCases TelephonyProviderTests
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:1fd7fd1da29549515322b55e481a21b286f16fd5
+Merged-In: I530948dd80a47f0eabef833348f48c97cd084239
+Change-Id: I530948dd80a47f0eabef833348f48c97cd084239
+---
+ .../providers/telephony/MmsProvider.java      | 15 +++-
+ .../providers/telephony/MmsSmsProvider.java   | 53 +++++++++++-
+ .../providers/telephony/SmsProvider.java      | 15 +++-
+ .../providers/telephony/SqlQueryChecker.java  | 34 ++++++--
+ .../providers/telephony/MmsProviderTest.java  | 86 +++++++++++++++++++
+ .../telephony/MmsSmsProviderTest.java         | 10 +++
+ .../providers/telephony/SmsProviderTest.java  | 35 ++++++++
+ .../telephony/SqlQueryCheckerTest.java        | 70 +++++++++++++++
+ 8 files changed, 309 insertions(+), 9 deletions(-)
+ create mode 100644 tests/src/com/android/providers/telephony/SqlQueryCheckerTest.java
+
+diff --git a/src/com/android/providers/telephony/MmsProvider.java b/src/com/android/providers/telephony/MmsProvider.java
+index 0737c2e..b0b76ca 100644
+--- a/src/com/android/providers/telephony/MmsProvider.java
++++ b/src/com/android/providers/telephony/MmsProvider.java
+@@ -339,6 +339,14 @@ public class MmsProvider extends ContentProvider {
+ 
+         final String pduTable = getPduTable(accessRestricted);
+         SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
++        if (accessRestricted) {
++            // Enable strict mode to validate columns against projection map and prevent SQL
++            // injection in WHERE clauses.
++            qb.setStrict(true);
++            // Enable strict grammar check to validate SQL syntax and prevent syntax-based
++            // injections (e.g. mismatched parentheses).
++            qb.setStrictGrammar(true);
++        }
+ 
+         // Generate the body of the query.
+         int match = sURLMatcher.match(uri);
+@@ -453,7 +461,12 @@ public class MmsProvider extends ContentProvider {
+             // No subscriptions associated with user, return empty cursor.
+             return new MatrixCursor((projection == null) ? (new String[] {}) : projection);
+         }
+-        selection = DatabaseUtils.concatenateWhere(selection, selectionBySubIds);
++        if (!TextUtils.isEmpty(selectionBySubIds)) {
++            // Use appendWhereStandalone to safely append the subId filter.
++            // This automatically wraps the filter in parentheses, preventing the caller's
++            // selection from escaping its scope and bypassing the filter.
++            qb.appendWhereStandalone(selectionBySubIds);
++        }
+ 
+         String finalSortOrder = null;
+         if (TextUtils.isEmpty(sortOrder)) {
+diff --git a/src/com/android/providers/telephony/MmsSmsProvider.java b/src/com/android/providers/telephony/MmsSmsProvider.java
+index 06054cc..328bbf8 100755
+--- a/src/com/android/providers/telephony/MmsSmsProvider.java
++++ b/src/com/android/providers/telephony/MmsSmsProvider.java
+@@ -92,9 +92,25 @@ public class MmsSmsProvider extends ContentProvider {
+             new UriMatcher(UriMatcher.NO_MATCH);
+     private static final String LOG_TAG = "MmsSmsProvider";
+     private static final boolean DEBUG = false;
++
++    // ThreadLocal to store the access restriction state of the calling thread.
++    // This allows static helper methods to access the state without propagating it through parameters.
++    private static final ThreadLocal<Boolean> sAccessRestricted = ThreadLocal.withInitial(() -> false);
++
++    private static void configureStrictQueryBuilder(SQLiteQueryBuilder qb) {
++        if (sAccessRestricted.get()) {
++            // Enable strict mode to validate columns against projection map and prevent SQL
++            // injection in WHERE clauses.
++            qb.setStrict(true);
++            // Enable strict grammar check to validate SQL syntax and prevent syntax-based
++            // injections (e.g. mismatched parentheses).
++            qb.setStrictGrammar(true);
++        }
++    }
+     private static final int MULTIPLE_THREAD_IDS_FOUND = TelephonyStatsLog
+         .MMS_SMS_PROVIDER_GET_THREAD_ID_FAILED__FAILURE_CODE__FAILURE_MULTIPLE_THREAD_IDS_FOUND;
+-    private static final int FAILURE_FIND_OR_CREATE_THREAD_ID_SQL = TelephonyStatsLog
++    private static final int FAILURE_FIND_OR_CREATE_THREAD_ID_SQL =
++        TelephonyStatsLog
+         .MMS_SMS_PROVIDER_GET_THREAD_ID_FAILED__FAILURE_CODE__FAILURE_FIND_OR_CREATE_THREAD_ID_SQL;
+ 
+     private static final String NO_DELETES_INSERTS_OR_UPDATES =
+@@ -434,6 +450,12 @@ public class MmsSmsProvider extends ContentProvider {
+             targetUri = ProviderMetricsLogger.TARGET_URI_THREAD_ID_RESOLUTION;
+         }
+ 
++        final int callerUid = Binder.getCallingUid();
++        final boolean accessRestricted = ProviderUtil.isAccessRestricted(
++                getContext(), getCallingPackage(), callerUid);
++        // Store the caller's restriction state in ThreadLocal for use in static helpers.
++        sAccessRestricted.set(accessRestricted);
++
+         try {
+             cursor = queryInternal(uri, projection, selection, selectionArgs, sortOrder);
+ 
+@@ -454,6 +476,10 @@ public class MmsSmsProvider extends ContentProvider {
+             Log.e("ProviderMetrics", "Database operation failed", e);
+             ProviderUtil.logRunningTelephonyProviderProcesses(getContext());
+             throw e;
++        } finally {
++            // Always remove the ThreadLocal value to prevent memory leaks and state pollution
++            // when the binder thread is returned to the pool.
++            sAccessRestricted.remove();
+         }
+         return cursor;
+     }
+@@ -1093,6 +1119,7 @@ public class MmsSmsProvider extends ContentProvider {
+         if (Flags.secureAccessToRestrictedRcsMessages()) {
+             final String[] projection = new String[] {ThreadsColumns._ID};
+             final SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
++            configureStrictQueryBuilder(qb);
+             qb.setTables(TABLE_THREADS);
+             qb.appendWhereStandalone(ThreadsColumns.RECIPIENT_IDS + " = ?");
+             if (!canReadRestrictedMessages) {
+@@ -1265,6 +1292,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 : getOtpRedactedThreadsTable(otpFilter);
+         if (Flags.secureAccessToRestrictedRcsMessages()) {
+             final SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
++            configureStrictQueryBuilder(qb);
+             qb.setTables(table);
+             if (!canReadRestrictedMessages) {
+                 ReadRestriction.appendReadRestrictionToQuery(qb, TABLE_THREADS,
+@@ -1297,7 +1325,9 @@ public class MmsSmsProvider extends ContentProvider {
+             String sortOrder, String smsTable, String pduTable, boolean canReadRestrictedMessages) {
+         String[] innerProjection = new String[] {BaseColumns._ID, Conversations.THREAD_ID};
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setTables(pduTable);
+         smsQueryBuilder.setTables(smsTable);
+@@ -1318,6 +1348,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 concatSelections(selection, Sms.TYPE + "=" + Sms.MESSAGE_TYPE_DRAFT),
+                 null, null);
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1325,6 +1356,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 new String[] { mmsSubQuery, smsSubQuery }, null, null);
+ 
+         SQLiteQueryBuilder outerQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(outerQueryBuilder);
+ 
+         outerQueryBuilder.setTables("(" + unionQuery + ")");
+ 
+@@ -1362,7 +1394,9 @@ public class MmsSmsProvider extends ContentProvider {
+             String sortOrder, String smsTable, String pduTable, boolean canReadRestrictedMessages,
+             String otpFilter) {
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setTables(pduTable);
+         smsQueryBuilder.setTables(smsTable);
+@@ -1393,6 +1427,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 smsSelection,
+                 "thread_id", "date = MAX(date)");
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1400,6 +1435,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 new String[] { mmsSubQuery, smsSubQuery }, null, null);
+ 
+         SQLiteQueryBuilder outerQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(outerQueryBuilder);
+ 
+         outerQueryBuilder.setTables("(" + unionQuery + ")");
+ 
+@@ -1425,7 +1461,9 @@ public class MmsSmsProvider extends ContentProvider {
+     private Cursor getFirstLockedMessage(String[] projection, String selection,
+             String sortOrder, String smsTable, String pduTable, boolean canReadRestrictedMessages) {
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setTables(pduTable);
+         smsQueryBuilder.setTables(smsTable);
+@@ -1451,6 +1489,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 BaseColumns._ID, "locked=1");
+ 
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1574,7 +1613,9 @@ public class MmsSmsProvider extends ContentProvider {
+         }
+ 
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setDistinct(true);
+         smsQueryBuilder.setDistinct(true);
+@@ -1600,6 +1641,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 MmsSms.TYPE_DISCRIMINATOR_COLUMN, columns, SMS_COLUMNS,
+                 0, "sms", smsSelectionWithOtp, null, null);
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1627,6 +1669,7 @@ public class MmsSmsProvider extends ContentProvider {
+         String extraSelection = "_id=" + threadIdString;
+         String finalSelection = concatSelections(selection, extraSelection);
+         SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(queryBuilder);
+         String[] columns = handleNullThreadsProjection(projection);
+ 
+         queryBuilder.setDistinct(true);
+@@ -1665,7 +1708,9 @@ public class MmsSmsProvider extends ContentProvider {
+         String[] mmsColumns = createMmsProjection(columns, pduTable);
+ 
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setTables(joinPduAndPendingMsgTables(pduTable));
+         smsQueryBuilder.setTables(smsTable);
+@@ -1699,6 +1744,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 SMS_COLUMNS, 1, "sms", finalSmsSelection,
+                 null, null);
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1706,6 +1752,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 new String[] { smsSubQuery, mmsSubQuery }, null, null);
+ 
+         SQLiteQueryBuilder outerQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(outerQueryBuilder);
+ 
+         outerQueryBuilder.setTables("(" + unionQuery + ")");
+ 
+@@ -1736,7 +1783,9 @@ public class MmsSmsProvider extends ContentProvider {
+         String[] mmsColumns = createMmsProjection(columns, pduTable);
+ 
+         SQLiteQueryBuilder mmsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(mmsQueryBuilder);
+         SQLiteQueryBuilder smsQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(smsQueryBuilder);
+ 
+         mmsQueryBuilder.setDistinct(true);
+         smsQueryBuilder.setDistinct(true);
+@@ -1772,6 +1821,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 0, "sms", smsSelection,
+                 null, null);
+         SQLiteQueryBuilder unionQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(unionQueryBuilder);
+ 
+         unionQueryBuilder.setDistinct(true);
+ 
+@@ -1780,6 +1830,7 @@ public class MmsSmsProvider extends ContentProvider {
+                 handleNullSortOrder(sortOrder), null);
+ 
+         SQLiteQueryBuilder outerQueryBuilder = new SQLiteQueryBuilder();
++        configureStrictQueryBuilder(outerQueryBuilder);
+ 
+         outerQueryBuilder.setTables("(" + unionQuery + ")");
+ 
+diff --git a/src/com/android/providers/telephony/SmsProvider.java b/src/com/android/providers/telephony/SmsProvider.java
+index 1159bf3..7b73160 100644
+--- a/src/com/android/providers/telephony/SmsProvider.java
++++ b/src/com/android/providers/telephony/SmsProvider.java
+@@ -322,6 +322,14 @@ public class SmsProvider extends ContentProvider {
+                 getContext(), getCallingPackage(), callingUid);
+         final String smsTable = getSmsTable(accessRestricted);
+         SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
++        if (accessRestricted) {
++            // Enable strict mode to validate columns against projection map and prevent SQL
++            // injection in WHERE clauses.
++            qb.setStrict(true);
++            // Enable strict grammar check to validate SQL syntax and prevent syntax-based
++            // injections (e.g. mismatched parentheses).
++            qb.setStrictGrammar(true);
++        }
+ 
+         // If access is restricted, we don't allow subqueries in the query.
+         if (accessRestricted) {
+@@ -605,7 +613,12 @@ public class SmsProvider extends ContentProvider {
+             filter = selectionBySubIds == null ?
+                     selectionByEmergencyNumbers : selectionBySubIds;
+         }
+-        selection = DatabaseUtils.concatenateWhere(selection, filter);
++        if (!TextUtils.isEmpty(filter)) {
++            // Use appendWhereStandalone to safely append the subId/emergency filter.
++            // This automatically wraps the filter in parentheses, preventing the caller's
++            // selection from escaping its scope and bypassing the filter.
++            qb.appendWhereStandalone(filter);
++        }
+ 
+         String orderBy = null;
+ 
+diff --git a/src/com/android/providers/telephony/SqlQueryChecker.java b/src/com/android/providers/telephony/SqlQueryChecker.java
+index d4e3428..9518c95 100644
+--- a/src/com/android/providers/telephony/SqlQueryChecker.java
++++ b/src/com/android/providers/telephony/SqlQueryChecker.java
+@@ -18,17 +18,39 @@ package com.android.providers.telephony;
+ 
+ import android.util.Log;
+ import android.provider.Telephony.ReadRestriction;
++import java.util.Locale;
+ import java.util.Set;
+ import java.util.function.Consumer;
+ 
+ public class SqlQueryChecker {
+-    private static final String SELECT_TOKEN = "select";
++    private static final Set<String> DISALLOWED_TOKENS = Set.of(
++            "SELECT",
++            "UNION",
++            "EXCEPT",
++            "INTERSECT",
++            "JOIN",
++            "FROM",
++            "GROUP",
++            "HAVING",
++            "WINDOW",
++            "VALUES"
++    );
++
++    private static final Set<String> DISALLOWED_FUNCTIONS = Set.of(
++            "HEX", "SUBSTR", "SQLITE_VERSION", "UNICODE", "PRINTF", "INSTR",
++            "RANDOM", "RANDOMBLOB", "ZEROBLOB", "TYPEOF"
++    );
++
+     private static final Set<String> FORBIDDEN_TOKENS =
+         Set.of(ReadRestriction.READ_RESTRICTION_COLUMN_NAME);
+ 
+-    static void checkTokenForSelect(String token) {
+-        if (SELECT_TOKEN.equalsIgnoreCase(token)) {
+-            throw new IllegalArgumentException("SELECT token not allowed in query");
++    static void checkTokenForDisallowed(String token) {
++        String tokenUpper = token.toUpperCase(Locale.US);
++        if (DISALLOWED_TOKENS.contains(tokenUpper)) {
++            throw new IllegalArgumentException(tokenUpper + " token not allowed in query");
++        }
++        if (DISALLOWED_FUNCTIONS.contains(tokenUpper)) {
++            throw new IllegalArgumentException("Function " + tokenUpper + " not allowed in query");
+         }
+     }
+ 
+@@ -40,14 +62,14 @@ public class SqlQueryChecker {
+     }
+ 
+     /**
+-     * Check the query parameters to see if they contain subqueries. Throws an
++     * Check the query parameters to see if they contain disallowed tokens. Throws an
+      * {@link IllegalArgumentException} if they do. See
+      * {@link android.content.ContentProvider#query} for the definitions of the arguments.
+      */
+     static void checkQueryParametersForSubqueries(String[] projection,
+             String selection, String sortOrder) {
+         checkQueryForToken(projection, selection, sortOrder, "MmsProvider",
+-                "checkQueryParametersForSubqueries", SqlQueryChecker::checkTokenForSelect);
++                "checkQueryParametersForSubqueries", SqlQueryChecker::checkTokenForDisallowed);
+     }
+ 
+     /**
+diff --git a/tests/src/com/android/providers/telephony/MmsProviderTest.java b/tests/src/com/android/providers/telephony/MmsProviderTest.java
+index 0a6883e..053bd5a 100644
+--- a/tests/src/com/android/providers/telephony/MmsProviderTest.java
++++ b/tests/src/com/android/providers/telephony/MmsProviderTest.java
+@@ -273,4 +273,90 @@ public class MmsProviderTest extends TestCase {
+             }
+         }
+     }
++
++    @Test
++    public void testDelete_withSelectionArgs_doesNotCheckSelectionArgsForForbiddenColumns() {
++        Uri testUri = Telephony.Mms.CONTENT_URI;
++        String selection = "thread_id=?";
++        // "restricted" is a forbidden column.
++        // If selectionArgs is checked, it would throw an exception.
++        String[] selectionArgs = new String[]{"restricted"};
++
++        try {
++            mMmsProviderTestable.delete(testUri, selection, selectionArgs);
++        } catch (IllegalArgumentException e) {
++            fail("delete should not throw IllegalArgumentException for selectionArgs: "
++                    + e.getMessage());
++        }
++    }
++
++    @Test
++    public void testUpdate_withSelectionArgs_doesNotCheckSelectionArgsForForbiddenColumns() {
++        Uri testUri = Telephony.Mms.CONTENT_URI;
++        ContentValues values = new ContentValues();
++        values.put(Telephony.Mms.READ, 1);
++        String selection = "thread_id=?";
++        // "restricted" is a forbidden column.
++        // If selectionArgs is checked, it would throw an exception.
++        String[] selectionArgs = new String[]{"restricted"};
++
++        try {
++            mMmsProviderTestable.update(testUri, values, selection, selectionArgs);
++        } catch (IllegalArgumentException e) {
++            fail("update should not throw IllegalArgumentException for selectionArgs: "
++                    + e.getMessage());
++        }
++    }
++
++    @Test
++    public void testInsertMms_withAddressAndThreadId_removesAddressColumn() {
++        final ContentValues values = getTestContentValues();
++        values.put(Telephony.Mms.THREAD_ID, 1);
++        values.put(Telephony.CanonicalAddressesColumns.ADDRESS, "12345");
++
++        Uri expected = Uri.parse("content://mms/1");
++        Uri actual = mContentResolver.insert(Telephony.Mms.CONTENT_URI, values);
++
++        assertEquals(expected, actual);
++    }
++
++    @Test
++    public void testUpdateMms_withAddress_removesAddressColumn() {
++        final ContentValues values = getTestContentValues();
++        Uri uri = mContentResolver.insert(Telephony.Mms.CONTENT_URI, values);
++        assertNotNull(uri);
++
++        final ContentValues updateValues = new ContentValues();
++        updateValues.put(Telephony.Mms.SUBJECT, "new subject");
++        updateValues.put(Telephony.CanonicalAddressesColumns.ADDRESS, "12345");
++
++        int count = mContentResolver.update(uri, updateValues, null, null);
++        assertEquals(1, count);
++    }
++
++    @Test
++    public void testInsertMms_withoutSubId_defaultsToInvalidSubIdWithoutCrash() {
++        final ContentValues values = getTestContentValues();
++        values.remove(Telephony.Mms.SUBSCRIPTION_ID);
++
++        Uri expected = Uri.parse("content://mms/1");
++        Uri actual = mContentResolver.insert(Telephony.Mms.CONTENT_URI, values);
++
++        assertEquals(expected, actual);
++    }
++
++    @Test
++    public void testQuery_withSubquery_throwsIllegalArgumentException() {
++        MmsProvider.ProviderUtilWrapper providerUtilWrapper =
++                mock(MmsProvider.ProviderUtilWrapper.class);
++        when(providerUtilWrapper.isAccessRestricted(
++                any(Context.class), anyString(), anyInt())).thenReturn(true);
++        mMmsProviderTestable.setProviderUtilWrapper(providerUtilWrapper);
++
++        Uri testUri = Telephony.Mms.CONTENT_URI;
++        String[] projection = new String[]{"(SELECT _id FROM sms) AS id"};
++
++        org.junit.Assert.assertThrows(IllegalArgumentException.class, () ->
++                mMmsProviderTestable.query(testUri, projection, null, null, null));
++    }
+ }
+diff --git a/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java b/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
+index cd0e4bf..a33e3c9 100644
+--- a/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
++++ b/tests/src/com/android/providers/telephony/MmsSmsProviderTest.java
+@@ -355,6 +355,16 @@ public class MmsSmsProviderTest {
+         }
+     }
+ 
++    @Test
++    public void testQuery_withSubquery_returnsNull() {
++        Uri testUri = Uri.parse("content://mms-sms/conversations");
++        String[] projection = new String[]{"(SELECT _id FROM sms) AS id"};
++
++        Cursor cursor = mMmsSmsProvider.query(testUri, projection, null, null, null);
++        assertNull("Cursor should be null due to caught exception for subquery in projection",
++                cursor);
++    }
++
+     static void logd(String msg) {
+         Log.d(TAG, msg);
+     }
+diff --git a/tests/src/com/android/providers/telephony/SmsProviderTest.java b/tests/src/com/android/providers/telephony/SmsProviderTest.java
+index aae7fe2..28efbaf 100644
+--- a/tests/src/com/android/providers/telephony/SmsProviderTest.java
++++ b/tests/src/com/android/providers/telephony/SmsProviderTest.java
+@@ -444,6 +444,41 @@ public class SmsProviderTest extends TestCase {
+         }
+     }
+ 
++    @Test
++    @SmallTest
++    public void testQuery_withMaliciousProjection_rejected() {
++        Uri testUri = Telephony.Sms.CONTENT_URI;
++        // Malicious projection attempting to execute a subquery or inject SQL
++        String[] maliciousProjection = new String[]{"_id", "(SELECT * FROM sms)"};
++
++        try {
++            Cursor cursor = mSmsProviderTestable.query(testUri, maliciousProjection, null, null,
++                    null);
++            assertNull("Cursor should be null due to caught exception for malicious projection",
++                    cursor);
++        } catch (IllegalArgumentException e) {
++            // Expected behavior if strict query validation throws
++        }
++    }
++
++    @Test
++    @SmallTest
++    public void testQuery_withMaliciousSortOrder_rejected() {
++        Uri testUri = Telephony.Sms.CONTENT_URI;
++        String[] projection = new String[]{Telephony.Sms._ID};
++        // Malicious sortOrder attempting to inject SQL
++        String maliciousSortOrder = "date DESC; DROP TABLE sms;";
++
++        try {
++            Cursor cursor = mSmsProviderTestable.query(testUri, projection, null, null,
++                    maliciousSortOrder);
++            assertNull("Cursor should be null due to caught exception for malicious sortOrder",
++                    cursor);
++        } catch (IllegalArgumentException e) {
++            // Expected behavior if strict query validation throws
++        }
++    }
++
+     @Test
+     @SmallTest
+     public void testOtpUpdate_whenDbLocked_retries() {
+diff --git a/tests/src/com/android/providers/telephony/SqlQueryCheckerTest.java b/tests/src/com/android/providers/telephony/SqlQueryCheckerTest.java
+new file mode 100644
+index 0000000..5c878d4
+--- /dev/null
++++ b/tests/src/com/android/providers/telephony/SqlQueryCheckerTest.java
+@@ -0,0 +1,70 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.providers.telephony;
++
++import static org.junit.Assert.assertThrows;
++
++import androidx.test.ext.junit.runners.AndroidJUnit4;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++@RunWith(AndroidJUnit4.class)
++public class SqlQueryCheckerTest {
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_valid() {
++        String[] projection = {"_id", "body"};
++        String selection = "thread_id=1";
++        String sortOrder = "date DESC";
++        SqlQueryChecker.checkQueryParametersForSubqueries(projection, selection, sortOrder);
++    }
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_invalidSelect() {
++        String[] projection = {"(SELECT _id FROM sms) AS id"};
++        assertThrows(IllegalArgumentException.class, () ->
++                SqlQueryChecker.checkQueryParametersForSubqueries(projection, null, null));
++    }
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_invalidFunction() {
++        String[] projection = {"hex(body)"};
++        assertThrows(IllegalArgumentException.class, () ->
++                SqlQueryChecker.checkQueryParametersForSubqueries(projection, null, null));
++    }
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_invalidUnion() {
++        String selection = "1=1 UNION SELECT _id FROM sms";
++        assertThrows(IllegalArgumentException.class, () ->
++                SqlQueryChecker.checkQueryParametersForSubqueries(null, selection, null));
++    }
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_invalidJoin() {
++        String selection = "1=1 JOIN pdu ON 1=1";
++        assertThrows(IllegalArgumentException.class, () ->
++                SqlQueryChecker.checkQueryParametersForSubqueries(null, selection, null));
++    }
++
++    @Test
++    public void testCheckQueryParametersForSubqueries_validAggregateFunctions() {
++        String[] projection = {"COUNT(*)", "MAX(date)", "MIN(date)", "SUM(_id)", "AVG(_id)"};
++        SqlQueryChecker.checkQueryParametersForSubqueries(projection, null, null);
++    }
++}
+-- 
+2.55.0
+

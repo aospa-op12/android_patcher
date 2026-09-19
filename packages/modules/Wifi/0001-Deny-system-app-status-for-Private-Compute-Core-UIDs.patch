@@ -1,0 +1,93 @@
+From 6f7bcdbe2498ead9b8ab05a1d27b98fe36dc4aef Mon Sep 17 00:00:00 2001
+From: Oscar Shu <xshu@google.com>
+Date: Thu, 28 May 2026 19:38:55 -0700
+Subject: [PATCH] Deny system app status for Private Compute Core UIDs in
+ WifiPermissionsUtil.
+
+Update WifiPermissionsUtil#isSystem to return false for Private Compute
+Core UIDs when the enablePccFrameworkSupport flag is enabled. This
+prevents PCC from being treated as a system app for Wi-Fi permissions.
+
+Flag: EXEMPT BUGFIX
+Bug: 514740359
+Test: TH
+(cherry picked from commit fc70c981d930651ef97869fb8ef53e13c3955fd7)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:8d8ed6f0ea1d2260b924b09dd07d312736d87866
+Merged-In: I69f79479e3a820899c6a8ae8a4312560720e09a1
+Change-Id: I69f79479e3a820899c6a8ae8a4312560720e09a1
+---
+ .../server/wifi/util/WifiPermissionsUtil.java |  4 ++
+ .../wifi/util/WifiPermissionsUtilTest.java    | 44 +++++++++++++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/service/java/com/android/server/wifi/util/WifiPermissionsUtil.java b/service/java/com/android/server/wifi/util/WifiPermissionsUtil.java
+index d4eb49b..7f74af7 100644
+--- a/service/java/com/android/server/wifi/util/WifiPermissionsUtil.java
++++ b/service/java/com/android/server/wifi/util/WifiPermissionsUtil.java
+@@ -1139,6 +1139,10 @@ public class WifiPermissionsUtil {
+             if (SdkLevel.isAtLeastT() && Process.isSdkSandboxUid(uid)) {
+                 return false;
+             }
++            if (SdkLevel.isAtLeastC() && Process.isPrivateComputeCoreUid(uid)) {
++                Log.w(TAG, "isSystem: isPrivateComputeCoreUid, returning false");
++                return false;
++            }
+             ApplicationInfo info = mContext.getPackageManager().getApplicationInfoAsUser(
+                     packageName, 0, UserHandle.getUserHandleForUid(uid));
+             return (info.flags & APP_INFO_FLAGS_SYSTEM_APP) != 0;
+diff --git a/service/tests/wifitests/src/com/android/server/wifi/util/WifiPermissionsUtilTest.java b/service/tests/wifitests/src/com/android/server/wifi/util/WifiPermissionsUtilTest.java
+index 3826614..36ee311 100644
+--- a/service/tests/wifitests/src/com/android/server/wifi/util/WifiPermissionsUtilTest.java
++++ b/service/tests/wifitests/src/com/android/server/wifi/util/WifiPermissionsUtilTest.java
+@@ -2122,4 +2122,48 @@ public class WifiPermissionsUtilTest extends WifiBaseTest {
+         when(UserHandle.getUserHandleForUid(eq(otherCallingUid))).thenReturn(testUserHandle);
+         assertTrue(codeUnderTest.areTwoAppsFromSameUser(TEST_CALLING_UID, otherCallingUid));
+     }
++
++    @Test
++    public void testIsSystem() throws Exception {
++        mSession =
++                ExtendedMockito.mockitoSession()
++                        .mockStatic(Process.class, withSettings().lenient())
++                        .strictness(Strictness.LENIENT)
++                        .startMocking();
++        setupTestCase();
++        WifiPermissionsUtil codeUnderTest =
++                new WifiPermissionsUtil(
++                        mMockPermissionsWrapper, mMockContext, mMockUserManager, mWifiInjector);
++
++        // 1. SdkSandboxUid
++        if (SdkLevel.isAtLeastT()) {
++            when(Process.isSdkSandboxUid(TEST_CALLING_UID)).thenReturn(true);
++            assertFalse(codeUnderTest.isSystem(TEST_PACKAGE_NAME, TEST_CALLING_UID));
++            when(Process.isSdkSandboxUid(TEST_CALLING_UID)).thenReturn(false);
++        }
++
++        // 2. PrivateComputeCoreUid
++        if (SdkLevel.isAtLeastC()) {
++            when(Process.isPrivateComputeCoreUid(TEST_CALLING_UID)).thenReturn(true);
++            assertFalse(codeUnderTest.isSystem(TEST_PACKAGE_NAME, TEST_CALLING_UID));
++            when(Process.isPrivateComputeCoreUid(TEST_CALLING_UID)).thenReturn(false);
++        }
++
++        // 3. System App
++        ApplicationInfo appInfo = new ApplicationInfo();
++        appInfo.flags = ApplicationInfo.FLAG_SYSTEM;
++        when(mMockContext.getPackageManager()).thenReturn(mMockPkgMgr);
++        when(mMockPkgMgr.getApplicationInfoAsUser(eq(TEST_PACKAGE_NAME), anyInt(), any()))
++                .thenReturn(appInfo);
++        assertTrue(codeUnderTest.isSystem(TEST_PACKAGE_NAME, TEST_CALLING_UID));
++
++        // 4. Non-System App
++        appInfo.flags = 0;
++        assertFalse(codeUnderTest.isSystem(TEST_PACKAGE_NAME, TEST_CALLING_UID));
++
++        // 5. NameNotFoundException
++        when(mMockPkgMgr.getApplicationInfoAsUser(eq(TEST_PACKAGE_NAME), anyInt(), any()))
++                .thenThrow(new PackageManager.NameNotFoundException());
++        assertFalse(codeUnderTest.isSystem(TEST_PACKAGE_NAME, TEST_CALLING_UID));
++    }
+ }
+-- 
+2.55.0
+

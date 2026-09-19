@@ -1,7 +1,7 @@
-From 6a8b51cd07989bf097a88a567fd6d6c1053d9848 Mon Sep 17 00:00:00 2001
+From fa87f820f17bce01b16f4f6f38c5dc00b624b7f7 Mon Sep 17 00:00:00 2001
 From: sungcheol ahn <donaldahn@google.com>
 Date: Mon, 18 May 2026 01:01:48 +0000
-Subject: [PATCH 23/27] Remove CLASS_EXISTENCE_CHECK metadata from
+Subject: [PATCH 23/49] Remove CLASS_EXISTENCE_CHECK metadata from
  ConnectivityCallListenerService
 
 Addressing security vulnerability b/501155244 by removing the

@@ -1,0 +1,215 @@
+From 3814e4c39a15df05b72b2b985e624bfbafa4c89a Mon Sep 17 00:00:00 2001
+From: Michael Mikhail <michaelmikhil@google.com>
+Date: Thu, 23 Apr 2026 21:19:19 +0000
+Subject: [PATCH 35/49] Hide media on smartspace view when setting is disabled
+
+Flag: EXEMPT BUGFIX
+Bug: 478725173
+Test: atest LockscreenSmartspaceControllerTest
+(cherry picked from commit 1c140dd857ff150a25b881b2f9865714f1b7e0f5)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:66f35422443fe82e6c0a458cb65a3b7ea4094d3b
+Merged-In: I8f589018521b281bb3fd28539f4099d28fdbd691
+Change-Id: I8f589018521b281bb3fd28539f4099d28fdbd691
+---
+ .../LockscreenSmartspaceControllerTest.kt     | 61 ++++++++++++++++++-
+ .../LockscreenSmartspaceController.kt         | 24 +++++++-
+ 2 files changed, 82 insertions(+), 3 deletions(-)
+
+diff --git a/packages/SystemUI/multivalentTests/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceControllerTest.kt b/packages/SystemUI/multivalentTests/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceControllerTest.kt
+index 5367a7ffb542..717bde0aecf3 100644
+--- a/packages/SystemUI/multivalentTests/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceControllerTest.kt
++++ b/packages/SystemUI/multivalentTests/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceControllerTest.kt
+@@ -68,7 +68,6 @@ import com.android.systemui.util.concurrency.FakeExecutor
+ import com.android.systemui.util.mockito.any
+ import com.android.systemui.util.mockito.argThat
+ import com.android.systemui.util.mockito.capture
+-import com.android.systemui.util.mockito.eq
+ import com.android.systemui.util.settings.SecureSettings
+ import com.android.systemui.util.time.FakeSystemClock
+ import java.util.Optional
+@@ -79,6 +78,7 @@ import org.junit.runner.RunWith
+ import org.mockito.ArgumentCaptor
+ import org.mockito.Captor
+ import org.mockito.Mock
++import org.mockito.Mockito.anyBoolean
+ import org.mockito.Mockito.anyInt
+ import org.mockito.Mockito.clearInvocations
+ import org.mockito.Mockito.mock
+@@ -88,6 +88,7 @@ import org.mockito.Mockito.times
+ import org.mockito.Mockito.verify
+ import org.mockito.Mockito.`when`
+ import org.mockito.MockitoAnnotations
++import org.mockito.kotlin.eq
+ import org.mockito.kotlin.mock
+ 
+ @SmallTest
+@@ -182,6 +183,7 @@ class LockscreenSmartspaceControllerTest : SysuiTestCase() {
+ 
+     private val fakePrivateLockscreenSettingUri = Uri.Builder().appendPath("test").build()
+     private val fakeNotifOnLockscreenSettingUri = Uri.Builder().appendPath("notif").build()
++    private val fakeMediaControlsSettingUri = Uri.Builder().appendPath("media").build()
+ 
+     private val userHandlePrimary: UserHandle = UserHandle(0)
+     private val userHandleManaged: UserHandle = UserHandle(2)
+@@ -207,6 +209,8 @@ class LockscreenSmartspaceControllerTest : SysuiTestCase() {
+             .thenReturn(fakePrivateLockscreenSettingUri)
+         `when`(secureSettings.getUriFor(NOTIF_ON_LOCKSCREEN_SETTING))
+             .thenReturn(fakeNotifOnLockscreenSettingUri)
++        `when`(secureSettings.getUriFor(Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN))
++            .thenReturn(fakeMediaControlsSettingUri)
+         `when`(smartspaceManager.createSmartspaceSession(any())).thenReturn(smartspaceSession)
+         `when`(datePlugin.getView(any()))
+             .thenReturn(createDateSmartspaceView(), createDateSmartspaceView())
+@@ -226,6 +230,7 @@ class LockscreenSmartspaceControllerTest : SysuiTestCase() {
+         setAllowPrivateNotifications(userHandleManaged, true)
+         setAllowPrivateNotifications(userHandleSecondary, true)
+         setShowNotifications(userHandlePrimary, true)
++        setShowMediaControls(userHandlePrimary, true)
+ 
+         smartspaceViewModelFactory = testKosmos().smartspaceViewModelFactory
+ 
+@@ -898,6 +903,49 @@ class LockscreenSmartspaceControllerTest : SysuiTestCase() {
+         verify(smartspaceView).setMediaTarget(target)
+     }
+ 
++    @Test
++    fun mediaTargetChanges_settingsDisabled_mediaTargetIsNull() {
++        setShowMediaControls(userHandlePrimary, false)
++        connectSession()
++
++        val mediaComponent = ComponentName("testpackage", "media")
++        val action =
++            SmartspaceAction.Builder("deviceMediaTitle", "TITLE").setSubtitle("ARTIST").build()
++        val target =
++            SmartspaceTarget.Builder("deviceMedia", mediaComponent, userHandlePrimary)
++                .setFeatureType(41) // MEDIA_CURRENT_PLAYING
++                .setHeaderAction(action)
++                .build()
++
++        controller.setMediaTarget(target)
++        verify(smartspaceView).setMediaTarget(null)
++    }
++
++    @Test
++    fun mediaSettingChanges_mediaTargetIsUpdated() {
++        connectSession()
++        val mediaComponent = ComponentName("testpackage", "media")
++        val target =
++            SmartspaceTarget.Builder("deviceMedia", mediaComponent, userHandlePrimary)
++                .setFeatureType(41) // MEDIA_CURRENT_PLAYING
++                .build()
++        controller.setMediaTarget(target)
++        verify(smartspaceView).setMediaTarget(target)
++        clearInvocations(smartspaceView)
++
++        // Media controls setting changes to disabled
++        setShowMediaControls(userHandlePrimary, false)
++        settingsObserver.onChange(true, fakeMediaControlsSettingUri)
++
++        verify(smartspaceView).setMediaTarget(null)
++
++        // Media controls setting changes back to enabled
++        setShowMediaControls(userHandlePrimary, true)
++        settingsObserver.onChange(true, fakeMediaControlsSettingUri)
++
++        verify(smartspaceView).setMediaTarget(target)
++    }
++
+     private fun connectSession() {
+         val dateView = controller.buildAndConnectDateView(context, false)
+         dateSmartspaceView = dateView as SmartspaceView
+@@ -1060,6 +1108,17 @@ class LockscreenSmartspaceControllerTest : SysuiTestCase() {
+             .thenReturn(if (value) 1 else 0)
+     }
+ 
++    private fun setShowMediaControls(user: UserHandle, value: Boolean) {
++        `when`(
++                secureSettings.getBoolForUser(
++                    eq(Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN),
++                    anyBoolean(),
++                    eq(user.identifier),
++                )
++            )
++            .thenReturn(value)
++    }
++
+     // Separate function for the date view, which implements a specific subset of all functions.
+     private fun createDateSmartspaceView(): SmartspaceView {
+         return spy(
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceController.kt b/packages/SystemUI/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceController.kt
+index e941a159fa65..2d067ae95987 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceController.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/lockscreen/LockscreenSmartspaceController.kt
+@@ -34,6 +34,7 @@ import android.os.UserHandle
+ import android.provider.Settings.Secure.LOCK_SCREEN_ALLOW_PRIVATE_NOTIFICATIONS
+ import android.provider.Settings.Secure.LOCK_SCREEN_SHOW_NOTIFICATIONS
+ import android.provider.Settings.Secure.LOCK_SCREEN_WEATHER_ENABLED
++import android.provider.Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN
+ import android.util.Log
+ import android.view.ContextThemeWrapper
+ import android.view.View
+@@ -138,10 +139,12 @@ constructor(
+ 
+     private val regionSamplingEnabled = featureFlags.isEnabled(Flags.REGION_SAMPLING)
+     private var showNotifications = false
++    private var showMediaControls = false
+     private var showSensitiveContentForCurrentUser = false
+     private var showSensitiveContentForManagedUser = false
+     private var managedUserHandle: UserHandle? = null
+     private var mSplitShadeEnabled = false
++    private var storedMediaTarget: SmartspaceTarget? = null
+     var mediaTarget: SmartspaceTarget? = null
+         private set
+ 
+@@ -511,6 +514,12 @@ constructor(
+             settingsObserver,
+             UserHandle.USER_ALL,
+         )
++        secureSettings.registerContentObserverForUserAsync(
++            secureSettings.getUriFor(MEDIA_CONTROLS_LOCK_SCREEN),
++            true,
++            settingsObserver,
++            UserHandle.USER_ALL,
++        )
+         sysuiColorExtractor.addOnColorsChangedListener(onColorsChangedListener)
+         configurationController.addCallback(configChangeListener)
+         statusBarStateController.addCallback(statusBarStateListener)
+@@ -536,8 +545,14 @@ constructor(
+     }
+ 
+     fun setMediaTarget(target: SmartspaceTarget?) {
+-        mediaTarget = target
+-        smartspaceViews.forEach { it.setMediaTarget(target) }
++        storedMediaTarget = target
++        updateMediaTarget()
++    }
++
++    private fun updateMediaTarget() {
++        val filteredTarget = if (showMediaControls) storedMediaTarget else null
++        mediaTarget = filteredTarget
++        smartspaceViews.forEach { it.setMediaTarget(filteredTarget) }
+     }
+ 
+     /** Disconnects the smartspace view from the smartspace service and cleans up any resources. */
+@@ -676,6 +691,9 @@ constructor(
+         showNotifications =
+             secureSettings.getIntForUser(LOCK_SCREEN_SHOW_NOTIFICATIONS, 0, userTracker.userId) == 1
+ 
++        showMediaControls =
++            secureSettings.getBoolForUser(MEDIA_CONTROLS_LOCK_SCREEN, true, userTracker.userId)
++
+         showSensitiveContentForCurrentUser =
+             secureSettings.getIntForUser(
+                 LOCK_SCREEN_ALLOW_PRIVATE_NOTIFICATIONS,
+@@ -694,6 +712,8 @@ constructor(
+                 ) == 1
+         }
+ 
++        // Update the media target in case media controls setting changes.
++        updateMediaTarget()
+         session?.requestSmartspaceUpdate()
+     }
+ 
+-- 
+2.55.0
+

@@ -1,0 +1,100 @@
+From 6f4886499c1f2d4251c9119d4225a6120b3e66ca Mon Sep 17 00:00:00 2001
+From: William Loh <wloh@google.com>
+Date: Wed, 13 May 2026 16:33:36 -0700
+Subject: [PATCH 43/49] Limit knownActivityEmbeddingCerts in manifest
+
+Enforce manifest validation limits on knownActivityEmbeddingCerts to prevent
+manifest bloat and potential performance degradation during signature
+verification at app launch. Specifically, limit the number of certificates
+to 50 and ensure each string is exactly 64 characters long (SHA-256 digest).
+
+Bug: 429417238
+Test: presubmit
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:5c47d86bbf21b44eced5551da433934109f10cd2
+Merged-In: Ic24dff9c3ca6d1635c7b47ccdc1a8f003cc92830
+Change-Id: Ic24dff9c3ca6d1635c7b47ccdc1a8f003cc92830
+---
+ .../internal/pm/pkg/parsing/ParsingUtils.java | 32 ++++++++++++-------
+ 1 file changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/core/java/com/android/internal/pm/pkg/parsing/ParsingUtils.java b/core/java/com/android/internal/pm/pkg/parsing/ParsingUtils.java
+index 26822c649db7..d846d0d334e6 100644
+--- a/core/java/com/android/internal/pm/pkg/parsing/ParsingUtils.java
++++ b/core/java/com/android/internal/pm/pkg/parsing/ParsingUtils.java
+@@ -39,6 +39,7 @@ import org.xmlpull.v1.XmlPullParserException;
+ 
+ import java.io.IOException;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.List;
+ import java.util.Set;
+ 
+@@ -55,6 +56,9 @@ public class ParsingUtils {
+ 
+     public static final int NOT_SET = -1;
+ 
++    private static final int MAX_KNOWN_ACTIVITY_EMBEDDING_CERTS = 50;
++    private static final int CERT_DIGEST_SHA256_LENGTH = 64;
++
+     @Nullable
+     public static String buildClassName(String pkg, CharSequence clsSeq) {
+         if (clsSeq == null || clsSeq.length() <= 0) {
+@@ -183,30 +187,25 @@ public class ParsingUtils {
+             return input.success(null);
+         }
+ 
++        List<String> knownEmbeddingCertificates = new ArrayList<>();
+         final int knownActivityEmbeddingCertsResource = sa.getResourceId(resourceId, 0);
+         if (knownActivityEmbeddingCertsResource != 0) {
+             // The knownCerts attribute supports both a string array resource as well as a
+             // string resource for the case where the permission should only be granted to a
+             // single known signer.
+-            Set<String> knownEmbeddingCertificates = null;
+             final String resourceType = res.getResourceTypeName(
+                     knownActivityEmbeddingCertsResource);
+             if (resourceType.equals("array")) {
+                 final String[] knownCerts = res.getStringArray(knownActivityEmbeddingCertsResource);
+-                if (knownCerts != null) {
+-                    knownEmbeddingCertificates = Set.of(knownCerts);
+-                }
++                knownEmbeddingCertificates.addAll(Arrays.asList(knownCerts));
+             } else {
+-                final String knownCert = res.getString(knownActivityEmbeddingCertsResource);
+-                if (knownCert != null) {
+-                    knownEmbeddingCertificates = Set.of(knownCert);
+-                }
++                knownEmbeddingCertificates.add(res.getString(knownActivityEmbeddingCertsResource));
+             }
+-            if (knownEmbeddingCertificates == null || knownEmbeddingCertificates.isEmpty()) {
++            if (knownEmbeddingCertificates.isEmpty()) {
+                 return input.error("Defined a knownActivityEmbeddingCerts attribute but the "
+                         + "provided resource is null");
+             }
+-            return input.success(knownEmbeddingCertificates);
++            return validateCerts(knownEmbeddingCertificates, input);
+         }
+ 
+         // If the knownCerts resource ID is null - the app specified a string value for the
+@@ -216,6 +215,17 @@ public class ParsingUtils {
+             return input.error("Defined a knownActivityEmbeddingCerts attribute but the provided "
+                     + "string is empty");
+         }
+-        return input.success(Set.of(knownCert));
++        knownEmbeddingCertificates.add(knownCert);
++        return validateCerts(knownEmbeddingCertificates, input);
++    }
++
++    private static ParseResult<Set<String>> validateCerts(List<String> certs, ParseInput input) {
++        // Remove invalid certs instead of failing the installation to minimize app compat issues.
++        certs.removeIf(c -> c.length() != CERT_DIGEST_SHA256_LENGTH);
++        if (certs.size() > MAX_KNOWN_ACTIVITY_EMBEDDING_CERTS) {
++            return input.error("The number of knownActivityEmbeddingCerts exceeds the "
++                    + "maximum allowed limit of " + MAX_KNOWN_ACTIVITY_EMBEDDING_CERTS);
++        }
++        return input.success(Set.copyOf(certs));
+     }
+ }
+-- 
+2.55.0
+

@@ -1,7 +1,7 @@
-From 9ab2c3977ab91223c8159920a6d23ff3c33c6550 Mon Sep 17 00:00:00 2001
+From aaec411efc319423c6324f67c3f04c2455798f22 Mon Sep 17 00:00:00 2001
 From: Yash Nagayach <yashnagayach@google.com>
 Date: Thu, 30 Apr 2026 07:58:41 -0700
-Subject: [PATCH 08/27] Validate caller in SlicePermissionActivity to prevent
+Subject: [PATCH 08/49] Validate caller in SlicePermissionActivity to prevent
  spoofing.
 
 Adds a check in SlicePermissionActivity's onCreate to verify the true caller. The activity will only proceed if launched by the SliceProvider's package, SystemUI, or the "android" system. This prevents Confused Deputy attacks where a malicious app could trick the user into granting slice permissions by spoofing the package name in the intent. New unit tests are added in SlicePermissionActivityTest to cover valid and invalid caller scenarios.

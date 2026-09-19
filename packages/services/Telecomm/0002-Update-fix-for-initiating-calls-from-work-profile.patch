@@ -1,7 +1,7 @@
-From e05a2c5c73757fbdcb941d266ef8de38319cd0b9 Mon Sep 17 00:00:00 2001
+From 173b44c280dd776b0ce2b0d3321ba3fe6f4100a9 Mon Sep 17 00:00:00 2001
 From: Pranav Madapurmath <pmadapurmath@google.com>
 Date: Tue, 2 Jun 2026 14:23:36 -0700
-Subject: [PATCH 2/2] Update fix for initiating calls from work profile
+Subject: [PATCH 2/4] Update fix for initiating calls from work profile
 
 It was found that getting the getQualifiedDefaultHolderPackageName from
 Role used the the system user, which would falsely indicate that the
@@ -20,7 +20,7 @@ Merged-In: I5f004f94dc282cb96ba4f74dc38ddd04b7dbdd6e
  1 file changed, 16 insertions(+), 1 deletion(-)
 
 diff --git a/src/com/android/server/telecom/CallIntentProcessor.java b/src/com/android/server/telecom/CallIntentProcessor.java
-index b971b1f80..19391b785 100644
+index b971b1f..19391b7 100644
 --- a/src/com/android/server/telecom/CallIntentProcessor.java
 +++ b/src/com/android/server/telecom/CallIntentProcessor.java
 @@ -13,6 +13,7 @@ import android.content.Context;

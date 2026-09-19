@@ -1,0 +1,53 @@
+From 11f88c175b56364bfe54102356bca8054a8ef4ae Mon Sep 17 00:00:00 2001
+From: Dmitry Dementyev <dementyev@google.com>
+Date: Tue, 2 Jun 2026 12:12:51 -0700
+Subject: [PATCH 37/49] Check notification permission in
+ getAuthToken(notifyOnAuthFailure).
+
+Test: manual
+Bug: 498857374
+Flag: EXEMPT BUGFIX
+(cherry picked from commit d0cb5db76f537bc604aa00a091a0332fd8d8a423)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:5abdef3213622923d03cd610c5a83e0beeede02f
+Merged-In: I0843f2c131ea4478dbb19b5265ce86908d5d84c3
+Change-Id: I0843f2c131ea4478dbb19b5265ce86908d5d84c3
+---
+ .../accounts/AccountManagerService.java       | 22 ++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/services/core/java/com/android/server/accounts/AccountManagerService.java b/services/core/java/com/android/server/accounts/AccountManagerService.java
+index 22a69268baa4..9ebadbe80361 100644
+--- a/services/core/java/com/android/server/accounts/AccountManagerService.java
++++ b/services/core/java/com/android/server/accounts/AccountManagerService.java
+@@ -3347,11 +3347,23 @@ public class AccountManagerService
+                                         "invalid intent in bundle returned");
+                                 return;
+                             }
+-                            doNotification(
+-                                    mAccounts,
+-                                    account,
+-                                    result.getString(AccountManager.KEY_AUTH_FAILED_MESSAGE),
+-                                    intent, "android", accounts.userId);
++                            boolean hasNotificationPermission = false;
++                            if (authenticatorInfo != null) {
++                                hasNotificationPermission = isPermittedForPackage(
++                                        authenticatorInfo.type.packageName, accounts.userId,
++                                        android.Manifest.permission.POST_NOTIFICATIONS);
++                            }
++                            if (hasNotificationPermission) {
++                                doNotification(
++                                        mAccounts,
++                                        account,
++                                        result.getString(AccountManager.KEY_AUTH_FAILED_MESSAGE),
++                                        intent, "android", accounts.userId);
++                            } else {
++                                Slog.w(TAG, "Authenticator for type " + account.type
++                                        + " doesn't have "
++                                        + android.Manifest.permission.POST_NOTIFICATIONS);
++                            }
+                         }
+                     }
+                     super.onResult(result);
+-- 
+2.55.0
+

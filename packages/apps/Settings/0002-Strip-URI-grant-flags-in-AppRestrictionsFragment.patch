@@ -1,7 +1,7 @@
-From 3417f75b9ee0cdb494035052d51f725330369124 Mon Sep 17 00:00:00 2001
+From 1529149ef04785b9a310b7430c57c9ffdbbb65b4 Mon Sep 17 00:00:00 2001
 From: Tetiana Meronyk <tetianameronyk@google.com>
 Date: Tue, 5 May 2026 15:22:33 -0700
-Subject: [PATCH 2/5] Strip URI grant flags in AppRestrictionsFragment
+Subject: [PATCH 2/8] Strip URI grant flags in AppRestrictionsFragment
 
 This change explicitly removes URI grant flags and clears data/clipData
 from the intent before starting the custom activity.

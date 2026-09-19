@@ -1,0 +1,133 @@
+From e3338126d07dff7afd23934d1c72024ecc19e19d Mon Sep 17 00:00:00 2001
+From: Himanshu Arora <hmarora@google.com>
+Date: Thu, 12 Mar 2026 08:09:59 +0000
+Subject: [PATCH 7/7] RESTRICT AUTOMERGE Revoke URI permissions on file path
+ updates
+
+Implement URI permission revocation for ExternalStorageProvider and DownloadStorageProvider when a file path is updated in MediaProvider
+
+Bug: 463362836
+Test: manual
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:88af9c319a1e75bd1badaa7ed54a8df642a1dc73
+Merged-In: If315d6361b429d0576d5d7cf863dec56b4f86657
+Change-Id: If315d6361b429d0576d5d7cf863dec56b4f86657
+---
+ .../java/android/provider/MediaStore.java     |  4 ++
+ .../providers/media/MediaProvider.java        | 64 ++++++++++++++++++-
+ 2 files changed, 67 insertions(+), 1 deletion(-)
+
+diff --git a/apex/framework/java/android/provider/MediaStore.java b/apex/framework/java/android/provider/MediaStore.java
+index a3f778c..1d78300 100644
+--- a/apex/framework/java/android/provider/MediaStore.java
++++ b/apex/framework/java/android/provider/MediaStore.java
+@@ -232,6 +232,10 @@ public final class MediaStore {
+     public static final String GET_DOCUMENT_URI_CALL = "get_document_uri";
+     /** @hide */
+     public static final String GET_MEDIA_URI_CALL = "get_media_uri";
++    /** @hide */
++    public static final String REVOKE_URI_PERMISSION_CALL = "revoke_uri_permission";
++    /** @hide */
++    public static final String EXTRA_OLD_PATH = "old_path";
+ 
+     /** @hide */
+     public static final String ENSURE_PROVIDERS_CALL = "ensure_providers_call";
+diff --git a/src/com/android/providers/media/MediaProvider.java b/src/com/android/providers/media/MediaProvider.java
+index 0aaaf7a..5dba84b 100644
+--- a/src/com/android/providers/media/MediaProvider.java
++++ b/src/com/android/providers/media/MediaProvider.java
+@@ -1239,6 +1239,8 @@ public class MediaProvider extends ContentProvider {
+                         Trace.endSection();
+                     }
+                 }
++
++                revokeUriPermissionGrantsOnPathChange(helper, oldRow, newRow);
+             });
+ 
+             if (newRow.getMediaType() != oldRow.getMediaType()) {
+@@ -1348,6 +1350,8 @@ public class MediaProvider extends ContentProvider {
+                         Trace.endSection();
+                     }
+                 }
++
++                revokeUriPermissionGrantsOnDocumentsProvider(deletedRow);
+             });
+         }
+     };
+@@ -1363,6 +1367,64 @@ public class MediaProvider extends ContentProvider {
+         });
+     }
+ 
++    private void revokeUriPermissionGrantsOnPathChange(@NonNull DatabaseHelper helper,
++            @NonNull FileRow oldRow, @NonNull FileRow newRow) {
++        final String oldPath = oldRow.getPath();
++        final String newPath = getPathForFileId(helper, newRow.getId());
++        if (oldPath != null && newPath != null && !oldPath.equalsIgnoreCase(newPath)) {
++            revokeUriPermissionGrantsOnDocumentsProvider(oldRow);
++        }
++    }
++
++    private String getPathForFileId(@NonNull DatabaseHelper helper, long fileId) {
++        return helper.runWithoutTransaction((db) -> {
++            try (Cursor c = db.query(Files.TABLE, new String[]{FileColumns.DATA},
++                    FileColumns._ID + "=?", new String[]{String.valueOf(fileId)},
++                    null, null, null)) {
++                if (c.moveToFirst()) {
++                    return c.getString(0);
++                }
++            }
++            return null;
++        });
++    }
++
++    private void revokeUriPermissionGrantsOnDocumentsProvider(FileRow oldRow) {
++        // A file is valid only if it's not trashed.
++        if (oldRow.isTrashed()) {
++            return;
++        }
++
++        String pathToBeRevoked = oldRow.getPath();
++        final boolean isDownload = FileUtils.isDownload(pathToBeRevoked);
++        final Bundle extras = new Bundle();
++        extras.putString(MediaStore.EXTRA_OLD_PATH, pathToBeRevoked);
++
++        // Notify ExternalStorageProvider to revoke path-based grants
++        try {
++            getContext().getContentResolver().call(
++                    getExternalStorageProviderAuthority(),
++                    MediaStore.REVOKE_URI_PERMISSION_CALL,
++                    /* arg */ null, extras);
++        } catch (Exception e) {
++            Log.w(TAG, "Failed to revoke permissions for " + pathToBeRevoked
++                    + " from ExternalStorageProvider", e);
++        }
++
++        // Notify DownloadStorageProvider to revoke path-based grants
++        if (isDownload) {
++            try {
++                getContext().getContentResolver().call(
++                        getDownloadsProviderAuthority(),
++                        MediaStore.REVOKE_URI_PERMISSION_CALL,
++                        /* arg */ null, extras);
++            } catch (Exception e) {
++                Log.w(TAG, "Failed to revoke permissions for " + pathToBeRevoked
++                        + " from DownloadStorageProvider", e);
++            }
++        }
++    }
++
+     private final UnaryOperator<String> mIdGenerator = path -> {
+         final long rowId = mCallingIdentity.get().getDeletedRowId(path);
+         if (rowId != -1 && isFuseThread()) {
+@@ -12653,7 +12715,7 @@ public class MediaProvider extends ContentProvider {
+ 
+     @RequiresApi(Build.VERSION_CODES.S)
+     private String getDownloadsProviderAuthorityFromDocumentsContract() {
+-        return DocumentsContract.EXTERNAL_STORAGE_PROVIDER_AUTHORITY;
++        return DocumentsContract.DOWNLOADS_PROVIDER_AUTHORITY;
+     }
+ 
+     private boolean isCallingIdentityDownloadProvider() {
+-- 
+2.55.0
+

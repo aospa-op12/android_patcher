@@ -1,7 +1,7 @@
-From 3d5457ffe7801e2ffb1f8912acb9fd1ec2fbaef1 Mon Sep 17 00:00:00 2001
+From 1a9eebab37b9e9cae916adb21dd7adfabf87cc47 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Wed, 6 May 2026 15:16:02 -0700
-Subject: [PATCH 02/10] Treat encrypted non-SC link as downgrade if SC was
+Subject: [PATCH 02/12] Treat encrypted non-SC link as downgrade if SC was
  previously supported.
 
 If both host and controller previously supported Secure Connections, and

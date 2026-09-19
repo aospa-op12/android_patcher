@@ -1,7 +1,7 @@
-From be7d0acee0b2364eb441fd763b4cbba0bd87ff60 Mon Sep 17 00:00:00 2001
+From 493c1707b768b415af9914b7b55ebfea3a23292b Mon Sep 17 00:00:00 2001
 From: Omar Eissa <oeissa@google.com>
 Date: Wed, 29 Apr 2026 08:17:15 +0000
-Subject: [PATCH 11/27] Don't parse 3p recognizer metadata in safe mode
+Subject: [PATCH 11/49] Don't parse 3p recognizer metadata in safe mode
 
 Malicious apps could put large xml recognition service metadata file
 that could lead to crash the system. Making sure that we don't parse

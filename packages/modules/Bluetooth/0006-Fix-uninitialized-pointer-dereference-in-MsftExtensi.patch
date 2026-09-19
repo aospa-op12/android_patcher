@@ -1,7 +1,7 @@
-From c3ef1644b33786f398e5c2429273ea1ae8b8606e Mon Sep 17 00:00:00 2001
+From 50330e6b1cbf641fb339d30841c019415213aa69 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Thu, 25 Jun 2026 15:58:10 -0700
-Subject: [PATCH 06/10] Fix uninitialized pointer dereference in
+Subject: [PATCH 06/12] Fix uninitialized pointer dereference in
  MsftExtensionManager
 
 A compromised Bluetooth controller could exploit an initialization race condition by sending a premature MSFT_LE_MONITOR_DEVICE_EVENT during stack bring-up. This triggers a virtual function call on an uninitialized `scanning_callbacks_` pointer, potentially leading to a control-flow hijack or Denial of Service in the privileged bluetooth process.

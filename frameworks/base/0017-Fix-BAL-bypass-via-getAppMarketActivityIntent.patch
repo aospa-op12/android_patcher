@@ -1,7 +1,7 @@
-From 732785af9cc1a8a9ef27a100d23bcb3b6aeaab31 Mon Sep 17 00:00:00 2001
+From 5e5303c32e752890ef1b990fcb7d07d9435aec11 Mon Sep 17 00:00:00 2001
 From: Himanshu Gupta <himanshuz@google.com>
 Date: Tue, 5 May 2026 17:00:48 +0100
-Subject: [PATCH 17/27] Fix BAL bypass via getAppMarketActivityIntent
+Subject: [PATCH 17/49] Fix BAL bypass via getAppMarketActivityIntent
 
 LauncherAppsService.getAppMarketActivityIntent created a PendingIntent
 on behalf of the system server (UID 1000) due to cleared identity.

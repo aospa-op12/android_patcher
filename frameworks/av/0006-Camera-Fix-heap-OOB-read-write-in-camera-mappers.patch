@@ -1,0 +1,220 @@
+From eb44c1d8ac8a66adc18b6ecfa4be19355ddfcf78 Mon Sep 17 00:00:00 2001
+From: Shuzhen Wang <shuzhenwang@google.com>
+Date: Fri, 12 Jun 2026 16:40:42 -0700
+Subject: [PATCH 6/8] Camera: Fix heap OOB read/write in camera mappers
+
+Change loop conditions in camera mappers (ZoomRatioMapper,
+DistortionMapper, RotateAndCropMapper, and correctMeteringRegions)
+to use `j + 5 <= entry.count` instead of `j < entry.count`.
+This prevents heap out-of-bounds read and write when a
+CaptureRequest contains a metering region with element count
+that is not a multiple of 5.
+
+Bug: 514726373
+Test: cameraservice_test_host
+Flag: EXEMPT BUGFIX
+TAG=agy
+CONV=e33154fc-dbf8-4f7d-ae71-88376924887a
+
+(cherry picked from commit cc78e7aa1be9e586e9f2c54b6c638a6f13954891)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:b7a783e8955afec2e8cfffa878334ba471dae93a
+Merged-In: I2edb88dbf20a1979ffb00e774cbb126fd9232cc1
+Change-Id: I2edb88dbf20a1979ffb00e774cbb126fd9232cc1
+---
+ .../device3/DistortionMapper.cpp              |  4 +-
+ .../device3/RotateAndCropMapper.cpp           |  4 +-
+ .../device3/ZoomRatioMapper.cpp               |  4 +-
+ .../tests/DistortionMapperTest.cpp            | 27 ++++++++++++++
+ .../tests/RotateAndCropMapperTest.cpp         | 30 +++++++++++++++
+ .../libcameraservice/tests/ZoomRatioTest.cpp  | 37 +++++++++++++++++++
+ 6 files changed, 100 insertions(+), 6 deletions(-)
+
+diff --git a/services/camera/libcameraservice/device3/DistortionMapper.cpp b/services/camera/libcameraservice/device3/DistortionMapper.cpp
+index 9a4e9e34b0..b2205048c0 100644
+--- a/services/camera/libcameraservice/device3/DistortionMapper.cpp
++++ b/services/camera/libcameraservice/device3/DistortionMapper.cpp
+@@ -143,7 +143,7 @@ status_t DistortionMapper::correctCaptureRequest(CameraMetadata *request) {
+     if (e.count != 0 && e.data.u8[0] != ANDROID_DISTORTION_CORRECTION_MODE_OFF) {
+         for (auto region : kMeteringRegionsToCorrect) {
+             e = request->find(region);
+-            for (size_t j = 0; j < e.count; j += 5) {
++            for (size_t j = 0; j + 5 <= e.count; j += 5) {
+                 int32_t weight = e.data.i32[j + 4];
+                 if (weight == 0) {
+                     continue;
+@@ -182,7 +182,7 @@ status_t DistortionMapper::correctCaptureResult(CameraMetadata *result) {
+     if (e.count != 0 && e.data.u8[0] != ANDROID_DISTORTION_CORRECTION_MODE_OFF) {
+         for (auto region : kMeteringRegionsToCorrect) {
+             e = result->find(region);
+-            for (size_t j = 0; j < e.count; j += 5) {
++            for (size_t j = 0; j + 5 <= e.count; j += 5) {
+                 int32_t weight = e.data.i32[j + 4];
+                 if (weight == 0) {
+                     continue;
+diff --git a/services/camera/libcameraservice/device3/RotateAndCropMapper.cpp b/services/camera/libcameraservice/device3/RotateAndCropMapper.cpp
+index 1ea077c30d..256a6f8d52 100644
+--- a/services/camera/libcameraservice/device3/RotateAndCropMapper.cpp
++++ b/services/camera/libcameraservice/device3/RotateAndCropMapper.cpp
+@@ -163,7 +163,7 @@ status_t RotateAndCropMapper::updateCaptureRequest(CameraMetadata *request) {
+ 
+     for (auto regionTag : kMeteringRegionsToCorrect) {
+         entry = request->find(regionTag);
+-        for (size_t i = 0; i < entry.count; i += 5) {
++        for (size_t i = 0; i + 5 <= entry.count; i += 5) {
+             int32_t weight = entry.data.i32[i + 4];
+             if (weight == 0) {
+                 continue;
+@@ -292,7 +292,7 @@ status_t RotateAndCropMapper::updateCaptureResult(CameraMetadata *result) {
+ 
+     for (auto regionTag : kMeteringRegionsToCorrect) {
+         entry = result->find(regionTag);
+-        for (size_t i = 0; i < entry.count; i += 5) {
++        for (size_t i = 0; i + 5 <= entry.count; i += 5) {
+             int32_t weight = entry.data.i32[i + 4];
+             if (weight == 0) {
+                 continue;
+diff --git a/services/camera/libcameraservice/device3/ZoomRatioMapper.cpp b/services/camera/libcameraservice/device3/ZoomRatioMapper.cpp
+index ef2109adf9..d9c7bef622 100644
+--- a/services/camera/libcameraservice/device3/ZoomRatioMapper.cpp
++++ b/services/camera/libcameraservice/device3/ZoomRatioMapper.cpp
+@@ -386,7 +386,7 @@ status_t ZoomRatioMapper::separateZoomFromCropLocked(CameraMetadata* metadata, b
+     camera_metadata_entry_t entry;
+     for (auto region : kMeteringRegionsToCorrect) {
+         entry = metadata->find(region);
+-        for (size_t j = 0; j < entry.count; j += 5) {
++        for (size_t j = 0; j + 5 <= entry.count; j += 5) {
+             int32_t weight = entry.data.i32[j + 4];
+             if (weight == 0) {
+                 continue;
+@@ -424,7 +424,7 @@ status_t ZoomRatioMapper::combineZoomAndCropLocked(CameraMetadata* metadata, boo
+     // Unscale regions with zoomRatio
+     for (auto region : kMeteringRegionsToCorrect) {
+         entry = metadata->find(region);
+-        for (size_t j = 0; j < entry.count; j += 5) {
++        for (size_t j = 0; j + 5 <= entry.count; j += 5) {
+             int32_t weight = entry.data.i32[j + 4];
+             if (weight == 0) {
+                 continue;
+diff --git a/services/camera/libcameraservice/tests/DistortionMapperTest.cpp b/services/camera/libcameraservice/tests/DistortionMapperTest.cpp
+index 33cc61aecb..26c250729d 100644
+--- a/services/camera/libcameraservice/tests/DistortionMapperTest.cpp
++++ b/services/camera/libcameraservice/tests/DistortionMapperTest.cpp
+@@ -379,3 +379,30 @@ TEST(DistortionMapperTest, CompareToOpenCV) {
+                 << expCoords[i] << ", " << expCoords[i + 1] << ")";
+     }
+ }
++
++TEST(DistortionMapperTest, MeteringRegionsBoundsTest) {
++    status_t res;
++
++    DistortionMapper m;
++    int32_t activeArray[] = {100, 100, 1000, 750};
++    int32_t preCorrectionActiveArray[] = {100, 100, 2000, 1500};
++    setupTestMapper(&m, identityDistortion, testICal,
++            activeArray, preCorrectionActiveArray);
++
++    CameraMetadata request;
++    uint8_t mode = ANDROID_DISTORTION_CORRECTION_MODE_FAST;
++    request.update(ANDROID_DISTORTION_CORRECTION_MODE, &mode, 1);
++
++    int32_t aeRegionsPoison[] = {10, 10, 100, 100, 50,
++                              20, 20, 200, 200, 50};
++    request.update(ANDROID_CONTROL_AE_REGIONS, aeRegionsPoison, 10);
++    int32_t aeRegions[] = {10, 10, 100, 100, 50, 999};
++    request.update(ANDROID_CONTROL_AE_REGIONS, aeRegions, 6);
++
++    res = m.correctCaptureRequest(&request);
++    ASSERT_EQ(res, OK);
++
++    camera_metadata_entry_t entry = request.find(ANDROID_CONTROL_AE_REGIONS);
++    ASSERT_EQ(entry.count, 6U);
++    EXPECT_EQ(entry.data.i32[5], 999);
++}
+diff --git a/services/camera/libcameraservice/tests/RotateAndCropMapperTest.cpp b/services/camera/libcameraservice/tests/RotateAndCropMapperTest.cpp
+index 9f86526a8c..b8e914ba42 100644
+--- a/services/camera/libcameraservice/tests/RotateAndCropMapperTest.cpp
++++ b/services/camera/libcameraservice/tests/RotateAndCropMapperTest.cpp
+@@ -398,5 +398,35 @@ TEST(RotationMapperTest, Transform180) {
+     EXPECT_EQUAL_WITHIN_N(full_landmarks, e.data.i32, 1, "App-side face landmarks aren't right");
+ }
+ 
++TEST(RotationMapperTest, MeteringRegionsBoundsTest) {
++    status_t res;
++
++    CameraMetadata deviceInfo = setupDeviceInfo(testActiveArray,
++            basicModes);
++
++    RotateAndCropMapper mapper(&deviceInfo);
++
++    CameraMetadata request;
++    uint8_t mode = ANDROID_SCALER_ROTATE_AND_CROP_90;
++    auto full_crop = std::vector<int32_t>{0,0, testActiveArray[2], testActiveArray[3]};
++    int32_t aeRegions[] = {10, 10, 100, 100, 50, 999};
++
++    request.update(ANDROID_SCALER_ROTATE_AND_CROP,
++            &mode, 1);
++    request.update(ANDROID_SCALER_CROP_REGION,
++            full_crop.data(), full_crop.size());
++    int32_t aeRegionsPoison[] = {10, 10, 100, 100, 50,
++                              20, 20, 200, 200, 50};
++    request.update(ANDROID_CONTROL_AE_REGIONS, aeRegionsPoison, 10);
++    request.update(ANDROID_CONTROL_AE_REGIONS,
++            aeRegions, 6);
++
++    res = mapper.updateCaptureRequest(&request);
++    ASSERT_EQ(res, OK);
++
++    auto entry = request.find(ANDROID_CONTROL_AE_REGIONS);
++    ASSERT_EQ(entry.count, 6U);
++    EXPECT_EQ(entry.data.i32[5], 999);
++}
+ 
+ } // namespace rotateAndCropMapperTest
+diff --git a/services/camera/libcameraservice/tests/ZoomRatioTest.cpp b/services/camera/libcameraservice/tests/ZoomRatioTest.cpp
+index f00d1e76e0..e6b9a10468 100644
+--- a/services/camera/libcameraservice/tests/ZoomRatioTest.cpp
++++ b/services/camera/libcameraservice/tests/ZoomRatioTest.cpp
+@@ -471,3 +471,40 @@ TEST(ZoomRatioTest, ZoomOverZoomRangeTest) {
+     subZoomOverZoomRangeTest(false/*usePreCorrectArray*/);
+     subZoomOverZoomRangeTest(true/*usePreCorrectArray*/);
+ }
++
++TEST(ZoomRatioTest, MeteringRegionsBoundsTest) {
++    status_t res;
++    ZoomRatioMapper mapper;
++    float zoomRatioRange[2] = {1.0f, 4.0f};
++    res = setupTestMapper(&mapper, 4.0/*maxDigitalZoom*/,
++            testActiveArraySize, testPreCorrActiveArraySize,
++            true/*hasZoomRatioRange*/, zoomRatioRange,
++            false/*usePreCorrectArray*/);
++    ASSERT_EQ(res, OK);
++
++    CameraMetadata metadata;
++    // Set scalerCropRegion to 2.0x so that `updateCaptureRequest` modifies
++    // the aeRegions
++    int32_t scalerCropRegion[] = {
++            testActiveArraySize[0] + testActiveArraySize[2]/4,
++            testActiveArraySize[1] + testActiveArraySize[3]/4,
++            testActiveArraySize[2]/2,
++            testActiveArraySize[3]/2,
++    };
++    metadata.update(ANDROID_SCALER_CROP_REGION, scalerCropRegion, 4);
++    // First set aeRegions to be a poinson value so that the OOB read
++    // returns non-0 value.
++    int32_t aeRegionsPoison[] = {10, 10, 100, 100, 50,
++                              20, 20, 200, 200, 50};
++    metadata.update(ANDROID_CONTROL_AE_REGIONS, aeRegionsPoison, 10);
++    // Set aeRegions to a smaller array to check for OOB read/write
++    int32_t aeRegions[] = {10, 10, 100, 100, 50, 999};
++    metadata.update(ANDROID_CONTROL_AE_REGIONS, aeRegions, 6);
++
++    res = mapper.updateCaptureRequest(&metadata);
++    ASSERT_EQ(res, OK);
++
++    camera_metadata_entry_t entry = metadata.find(ANDROID_CONTROL_AE_REGIONS);
++    ASSERT_EQ(entry.count, 6U);
++    EXPECT_EQ(entry.data.i32[5], 999);
++}
+-- 
+2.55.0
+

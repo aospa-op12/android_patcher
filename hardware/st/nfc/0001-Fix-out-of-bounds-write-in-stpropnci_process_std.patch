@@ -1,7 +1,7 @@
-From 2e178227184d27c3b09335f47ffd440c29ccefd0 Mon Sep 17 00:00:00 2001
+From 649c20cbecd5599630ed98314b39a0f97e2acd32 Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Tue, 23 Jun 2026 19:20:31 -0700
-Subject: [PATCH] Fix out-of-bounds write in stpropnci_process_std
+Subject: [PATCH 1/2] Fix out-of-bounds write in stpropnci_process_std
 
 An out-of-bounds write vulnerability exists in the ST NFC HAL when processing `RF_NFCEE_DISCOVERY_REQ_NTF` messages from the NFC controller. The `stpropnci_process_std()` function trusted the chip-provided entry count without bounds-checking against the fixed-size `ee_info` array, which could be exploited by a compromised NFC controller to overwrite adjacent global state data.
 

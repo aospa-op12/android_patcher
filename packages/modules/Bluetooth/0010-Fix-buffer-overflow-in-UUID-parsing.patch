@@ -1,7 +1,7 @@
-From 5f16da439bd3655929df42e5dc955ca82c87cfea Mon Sep 17 00:00:00 2001
+From a2307e62860988e2daa63cc849fe598b78477083 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 7 Jul 2026 10:42:39 -0700
-Subject: [PATCH 10/10] Fix buffer overflow in UUID parsing
+Subject: [PATCH 10/12] Fix buffer overflow in UUID parsing
 
 The `btif_split_uuids_string` function was called with a hardcoded
 maximum number of UUIDs, potentially exceeding the size of the provided

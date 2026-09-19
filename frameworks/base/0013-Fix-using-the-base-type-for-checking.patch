@@ -1,7 +1,7 @@
-From 081bb76f4a47e970a943543759ba2df89e47de73 Mon Sep 17 00:00:00 2001
+From 009f5720edd3338da5e51887a17d64b2a7c286cb Mon Sep 17 00:00:00 2001
 From: Candice Lo <chihtinglo@google.com>
 Date: Fri, 24 Apr 2026 07:56:29 +0000
-Subject: [PATCH 13/27] Fix using the base type for checking
+Subject: [PATCH 13/49] Fix using the base type for checking
 
 When a window is a sub-window, its `mAttr.type` won't be captured by `isSystemAlertWindowType`. Therefore, the window could run into the early return condition and skip the hide/show in `setHiddenWhileSuspended` when its top parent window is a system alert window and the app is suspended, which will lead to security concerns. Therefore, we check the base type of the window instead.
 

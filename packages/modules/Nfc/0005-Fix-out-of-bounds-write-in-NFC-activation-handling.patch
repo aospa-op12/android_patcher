@@ -1,7 +1,7 @@
-From e3f20f330e1662a770d93f19bceb0eba30d271a7 Mon Sep 17 00:00:00 2001
+From f56b90ccc1877be47e87740fe547ae1a76084679 Mon Sep 17 00:00:00 2001
 From: Kyle Hsiao <kylehsiao@google.com>
 Date: Mon, 22 Jun 2026 20:47:21 -0700
-Subject: [PATCH 5/7] Fix out-of-bounds write in NFC activation handling
+Subject: [PATCH 05/13] Fix out-of-bounds write in NFC activation handling
 
 When an NFCC sends a short RF_INTF_ACTIVATED_NTF packet, a parsing failure can bypass the initialization of a tech parameter union on the stack. This uninitialized stack data is later used as a length parameter for a memcpy, leading to an out-of-bounds write in the NFC process that can corrupt function pointers.
 

@@ -1,7 +1,7 @@
-From c64d8c5013003153686ece4e0a16d82e3d855488 Mon Sep 17 00:00:00 2001
+From e68e6cbdf67d5487b93e9acc00e1fdf44c54a8d1 Mon Sep 17 00:00:00 2001
 From: Nan Wu <wnan@google.com>
 Date: Tue, 31 Mar 2026 18:33:32 -0700
-Subject: [PATCH 06/27] Move intent redirect checks before intent resolution.
+Subject: [PATCH 06/49] Move intent redirect checks before intent resolution.
 
 The checks for missing or invalid creator tokens and the extraction of intent creator information are now performed before calling supervisor.resolveIntent/resolveActivity. This ensures that the intent's component is not changed by resolveActivity method, which invalidates creatorToken.
 

@@ -1,0 +1,452 @@
+From 97b9e065749848a7ff97ff4ce01f8e9086623520 Mon Sep 17 00:00:00 2001
+From: Brian Delwiche <delwiche@google.com>
+Date: Tue, 16 Jun 2026 11:07:21 -0700
+Subject: [PATCH 11/12] [RESTRICT AUTOMERGE] Enforce incoming CTKD security
+ requirements
+
+This change enforces strict pairing and encryption requirements for
+incoming Cross-Transport Key Derivation (CTKD) requests over BR/EDR.
+Additionally, it ensures authentication completion events correctly
+reflect BR/EDR pairing status and safely initializes internal SMP state
+data.
+
+Combined backport of the following patches from Main:
+  ag/39220028
+  ag/39590417
+  ag/39630337
+  ag/40100312
+
+Bug: 497102083
+Bug: 497851840
+Bug: 510038786
+Test: atest net_test_stack_smp
+Flag: EXEMPT BUGFIX
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:08866609d05112e802173903adb9329e0cfd6504
+Merged-In: Ib6812bb68095a7ce745e5dba9feb4ba565d966e7
+Change-Id: Ib6812bb68095a7ce745e5dba9feb4ba565d966e7
+---
+ system/bta/dm/bta_dm_sec.cc            |   2 +
+ system/stack/btm/btm_sec.cc            |  11 +-
+ system/stack/btm/btm_security_record.h |   4 +
+ system/stack/smp/smp_act.cc            |  66 +++++---
+ system/stack/test/stack_smp_test.cc    | 222 +++++++++++++++++++++++++
+ 5 files changed, 280 insertions(+), 25 deletions(-)
+
+diff --git a/system/bta/dm/bta_dm_sec.cc b/system/bta/dm/bta_dm_sec.cc
+index 7b78f4ab8a9..b818873e1ad 100644
+--- a/system/bta/dm/bta_dm_sec.cc
++++ b/system/bta/dm/bta_dm_sec.cc
+@@ -832,6 +832,8 @@ static tBTM_STATUS bta_dm_ble_smp_cback(tBTM_LE_EVT event, const RawAddress& bda
+       bd_name_from_char_pointer(sec_event.auth_cmpl.bd_name,
+                                 get_security_client_interface().BTM_SecReadDevName(bda));
+ 
++      sec_event.auth_cmpl.is_ctkd = p_data->complt.smp_over_br;
++
+       if (p_data->complt.reason != SMP_SUCCESS) {
+         // TODO This is not a proper use of this type
+         sec_event.auth_cmpl.fail_reason = static_cast<tHCI_STATUS>(
+diff --git a/system/stack/btm/btm_sec.cc b/system/stack/btm/btm_sec.cc
+index a48759d8b55..c26feed0365 100644
+--- a/system/stack/btm/btm_sec.cc
++++ b/system/stack/btm/btm_sec.cc
+@@ -3539,7 +3539,9 @@ void btm_sec_encryption_change_evt(uint16_t handle, tHCI_STATUS status, uint8_t
+                                    uint8_t key_size, uint8_t mic_length, uint8_t key_sched_enabled,
+                                    uint8_t key_sched_debug_flag) {
+   if (status == HCI_SUCCESS && encr_enable != 0 && !BTM_IsBleConnection(handle)) {
+-    if (key_size != 0) {
++    // Key size is negotiated every time for BR/EDR encryption, so we need it for reporting
++    // encryption change event further
++    if (key_size != 0) {  // Key size is already available, so no need to read it again
+       read_encryption_key_size_complete_after_encryption_change(encr_enable, status, handle,
+                                                                 key_size);
+       return;
+@@ -3550,6 +3552,13 @@ void btm_sec_encryption_change_evt(uint16_t handle, tHCI_STATUS status, uint8_t
+       btsnd_hcic_read_encryption_key_size(
+               handle,
+               base::Bind(&read_encryption_key_size_complete_after_encryption_change, encr_enable));
++
++      // CTKD request from the remote central device will get rejected if the link is "not"
++      // encrypted. So we should mark the link as encrypted immediately.
++      BtmDevice* p_device = btm_get_dev_by_handle(handle);
++      if (p_device != nullptr) {
++        p_device->sec_rec.set_device_encrypted();
++      }
+       return;
+     }
+   }
+diff --git a/system/stack/btm/btm_security_record.h b/system/stack/btm/btm_security_record.h
+index 9dc800d0a74..4a0e68759a5 100644
+--- a/system/stack/btm/btm_security_record.h
++++ b/system/stack/btm/btm_security_record.h
+@@ -164,6 +164,10 @@ struct BtmSecurityRecord {
+                                       name */
+   BtIoCap rmt_io_caps;             /* IO capability of the peer device */
+   tBTM_AUTH_REQ rmt_auth_req;      /* the auth_req flag as in the IO caps rsp evt */
++  bool new_encryption_key_is_p256; /* Set to true when the newly generated LK
++                                   ** is generated from P-256.
++                                   ** Link encrypted with such LK can be used
++                                   ** for SM over BR/EDR. */
+ 
+   /* Whether BR/EDR pairing succeeded recently. Helps decide whether to perform CTKD or not */
+   enum class BrEdrScEncReason : uint8_t {
+diff --git a/system/stack/smp/smp_act.cc b/system/stack/smp/smp_act.cc
+index 0c3911113df..17544778053 100644
+--- a/system/stack/smp/smp_act.cc
++++ b/system/stack/smp/smp_act.cc
+@@ -855,30 +855,42 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+ 
+   log::verbose("addr:{}", p_cb->pairing_bda);
+ 
++  if (smp_command_has_invalid_length(p_cb)) {
++    tSMP_INT_DATA smp_int_data{};
++    smp_int_data.status = SMP_INVALID_PARAMETERS;
++    smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
++    return;
++  }
++
+   if (p_device == nullptr) {
+-    log::error("Device not found for bd_addr: {}", p_cb->pairing_bda);
++    log::error("Device not found for {}", p_cb->pairing_bda);
+     return;
+   }
+ 
+-  /* rejecting BR pairing request over non-SC BR link */
+-  if (p_device->sec_rec.bredr_sc_enc_reason == BtmSecurityRecord::BrEdrScEncReason::OTHER &&
+-      p_cb->role == HCI_ROLE_PERIPHERAL) {
+-    tSMP_INT_DATA smp_int_data;
++  if (!btm_is_bonded(p_device->bd_addr, BT_TRANSPORT_BR_EDR) ||
++      (p_device->sec_rec.link_key_type != BTM_LKEY_TYPE_UNAUTH_COMB_P_256 &&
++       p_device->sec_rec.link_key_type != BTM_LKEY_TYPE_AUTH_COMB_P_256)) {
++    log::warn("Not bonded over BR/EDR transport with SC {}", p_device->bd_addr);
++    tSMP_INT_DATA smp_int_data{};
+     smp_int_data.status = SMP_XTRANS_DERIVE_NOT_ALLOW;
+     smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
+     return;
+   }
+ 
+-  /* erase all keys if it is peripheral proc pairing req*/
+-  if (p_device && (p_cb->role == HCI_ROLE_PERIPHERAL)) {
+-    btm_sec_clear_ble_keys(p_device);
++  if (!p_device->sec_rec.is_device_encrypted()) {
++    log::warn("CKTD not allowed over unencrypted link {}", p_device->bd_addr);
++    tSMP_INT_DATA smp_int_data{};
++    smp_int_data.status = SMP_XTRANS_DERIVE_NOT_ALLOW;
++    smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
++    return;
+   }
+ 
+-  p_cb->flags |= SMP_PAIR_FLAG_ENC_AFTER_PAIR;
+-
+-  if (smp_command_has_invalid_length(p_cb)) {
+-    tSMP_INT_DATA smp_int_data;
+-    smp_int_data.status = SMP_INVALID_PARAMETERS;
++  if (btm_is_bonded(p_device->bd_addr, BT_TRANSPORT_LE) &&
++      ((p_device->sec_rec.sec_flags & BTM_SEC_LE_LINK_KEY_AUTHED) &&
++       !(p_device->sec_rec.sec_flags & BTM_SEC_LINK_KEY_AUTHED))) {
++    log::warn("Already bonded over LE with higher security {}", p_device->bd_addr);
++    tSMP_INT_DATA smp_int_data{};
++    smp_int_data.status = SMP_XTRANS_DERIVE_NOT_ALLOW;
+     smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
+     return;
+   }
+@@ -897,27 +909,29 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+   if (p_cb->peer_enc_size < min_key_size) {
+     log::warn("Encryption key size {} smaller than the minimum {}", p_cb->peer_enc_size,
+               min_key_size);
+-    tSMP_INT_DATA smp_int_data;
++    tSMP_INT_DATA smp_int_data{};
+     smp_int_data.status = SMP_ENC_KEY_SIZE;
+     smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
+     return;
+   }
+ 
+   if (smp_command_has_invalid_parameters(p_cb)) {
+-    tSMP_INT_DATA smp_int_data;
++    tSMP_INT_DATA smp_int_data{};
+     smp_int_data.status = SMP_INVALID_PARAMETERS;
+     smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
+     return;
+   }
+ 
+-  /* peer (central) started pairing sending Pairing Request */
+-  /* or being central device always use received i/r key as keys to distribute
+-   */
+-  p_cb->local_i_key = p_cb->peer_i_key;
+-  p_cb->local_r_key = p_cb->peer_r_key;
++  log::debug(
++          "pairing_bda:{} peer_io_caps: {} peer_oob_flag: {} peer_auth_req: {} peer_enc_size: {} "
++          "peer_i_key: {} peer_r_key: {}",
++          p_cb->pairing_bda, p_cb->peer_io_caps,
++          p_cb->peer_oob_flag, p_cb->peer_auth_req,
++          p_cb->peer_enc_size, p_cb->peer_i_key, p_cb->peer_r_key);
+ 
+   if (p_cb->role == HCI_ROLE_PERIPHERAL) {
+     p_device->sec_rec.bredr_sc_enc_reason = BtmSecurityRecord::BrEdrScEncReason::OTHER;
++    btm_sec_clear_ble_keys(p_device);   /* Erase all prior LE keys */
+     /* shortcut to skip Security Grant step */
+     p_cb->cb_evt = SMP_BR_KEYS_REQ_EVT;
+   } else {
+@@ -926,10 +940,14 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+             "central rcvs valid PAIRING RESPONSE. Supposed to move to key distribution phase.");
+   }
+ 
+-  /* auth_req received via BR/EDR SM channel is set to 0,
+-     but everything derived/exchanged has to be saved */
+-  p_cb->peer_auth_req |= SMP_AUTH_BOND;
+-  p_cb->loc_auth_req |= SMP_AUTH_BOND;
++  p_cb->flags |= SMP_PAIR_FLAG_ENC_AFTER_PAIR;
++  p_cb->local_i_key = p_cb->peer_i_key;  /* Distribute same keys as requested by peer */
++  p_cb->local_r_key = p_cb->peer_r_key;  /* Distribute same keys as requested by peer */
++  p_cb->peer_auth_req |= SMP_AUTH_BOND;  /* CTKD keys have to be persisted */
++  p_cb->loc_auth_req |= SMP_AUTH_BOND;   /* CTKD keys have to be persisted */
++
++  /* Block CTKD on reconnect */
++  p_device->sec_rec.new_encryption_key_is_p256 = false;
+ }
+ 
+ /*******************************************************************************
+diff --git a/system/stack/test/stack_smp_test.cc b/system/stack/test/stack_smp_test.cc
+index 2802da41bd4..c0201793ff3 100644
+--- a/system/stack/test/stack_smp_test.cc
++++ b/system/stack/test/stack_smp_test.cc
+@@ -28,11 +28,14 @@
+ #include "hci/include/packet_fragmenter.h"
+ #include "internal_include/stack_config.h"
+ #include "stack/btm/btm_int_types.h"
++#include "stack/btm/btm_sec.h"
+ #include "stack/btm/internal/btm_api.h"
+ #include "stack/include/acl_api.h"
+ #include "stack/include/btm_ble_api.h"
+ #include "stack/include/smp_status.h"
+ #include "stack/mock/mock_stack_acl.h"
++#include "stack/mock/mock_stack_btm_dev.h"
++#include "stack/mock/mock_stack_btm_sec.h"
+ #include "stack/smp/p_256_ecc_pp.h"
+ #include "stack/smp/smp_int.h"
+ 
+@@ -395,3 +398,222 @@ TEST(SmpStatusText, smp_status_text) {
+           unknown.c_str(),
+           smp_status_text(static_cast<tSMP_STATUS>(std::numeric_limits<uint8_t>::max())).c_str());
+ }
++
++class SmpBrProcessPairingCommandTest : public testing::Test {
++ public:
++  static constexpr uint8_t SMP_PAIRING_REQ_SIZE = 7;
++
++ protected:
++  tSMP_CB cb_;
++  BtmDevice* p_dev_rec_;
++  const RawAddress pairing_bda_ = RawAddress("11:22:33:44:55:66");
++
++  void SetUp() override {
++    test::mock::stack_btm_sec::btm_sec_get_min_enc_key_size.body = [](void) {
++      return MIN_KEY_SIZE_DEFAULT;
++    };
++
++    test::mock::stack_btm_dev::btm_get_dev.body = [this](const RawAddress& bd_addr) {
++      if (bd_addr == pairing_bda_) {
++        return p_dev_rec_;
++      }
++      return static_cast<BtmDevice*>(nullptr);
++    };
++
++    cb_ = {};
++    cb_.smp_rsp_timer_ent = alarm_new("smp_rsp_timer");
++    cb_.delayed_auth_timer_ent = alarm_new("delayed_auth_timer");
++    cb_.rcvd_cmd_len = SmpBrProcessPairingCommandTest::SMP_PAIRING_REQ_SIZE;
++    cb_.pairing_bda = pairing_bda_;
++    cb_.role = HCI_ROLE_CENTRAL;
++    p_dev_rec_ = new BtmDevice();
++    p_dev_rec_->bd_addr = pairing_bda_;
++  }
++
++  void TearDown() override {
++    test::mock::stack_btm_sec::btm_sec_get_min_enc_key_size.body = {};
++    test::mock::stack_btm_dev::btm_get_dev.body = {};
++    if (cb_.smp_rsp_timer_ent) {
++      alarm_free(cb_.smp_rsp_timer_ent);
++      cb_.smp_rsp_timer_ent = nullptr;
++    }
++    if (cb_.delayed_auth_timer_ent) {
++      alarm_free(cb_.delayed_auth_timer_ent);
++      cb_.delayed_auth_timer_ent = nullptr;
++    }
++    delete p_dev_rec_;
++    p_dev_rec_ = nullptr;
++  }
++
++  void CallProcessPairingCommand() {
++    tSMP_INT_DATA data;
++    uint8_t pkt[6] = {0};
++    pkt[0] = static_cast<uint8_t>(cb_.peer_io_caps);
++    pkt[1] = cb_.peer_oob_flag;
++    pkt[2] = cb_.peer_auth_req;
++    pkt[3] = cb_.peer_enc_size;
++    pkt[4] = cb_.peer_i_key;
++    pkt[5] = cb_.peer_r_key;
++    data.p_data = pkt;
++
++    cb_.rcvd_cmd_code = SMP_OPCODE_PAIRING_REQ;
++    cb_.total_tx_unacked = 1;  // Prevent smp_proc_pairing_cmpl from resetting cb_
++
++    // Set state so SMP_BR_AUTH_CMPL_EVT isn't ignored
++    cb_.br_state = SMP_BR_STATE_PAIR_REQ_RSP;
++    smp_br_process_pairing_command(&cb_, &data);
++  }
++};
++
++TEST_F(SmpBrProcessPairingCommandTest, test_invalid_command_length) {
++  cb_.rcvd_cmd_len = SmpBrProcessPairingCommandTest::SMP_PAIRING_REQ_SIZE - 1;  // Invalid length
++
++  CallProcessPairingCommand();
++
++  EXPECT_EQ(cb_.status, SMP_INVALID_PARAMETERS);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_device_not_found) {
++  cb_.pairing_bda = RawAddress::kEmpty;
++
++  CallProcessPairingCommand();
++
++  EXPECT_EQ(cb_.status, SMP_SUCCESS);
++  EXPECT_EQ(cb_.flags, 0);
++  EXPECT_EQ(cb_.peer_auth_req, 0);
++  EXPECT_EQ(cb_.loc_auth_req, 0);
++  EXPECT_EQ(cb_.cb_evt, SMP_EVT_NONE);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_ctkd_not_bonded_br_edr) {
++  // Not bonded
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_UNKNOWN;
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_XTRANS_DERIVE_NOT_ALLOW);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_ctkd_temp_paired) {
++  // Temporarily paired
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_TEMPORARY;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_XTRANS_DERIVE_NOT_ALLOW);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_ctkd_no_sc) {
++  // Bonded but no SC
++  cb_.status = SMP_SUCCESS;
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_COMBINATION;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_XTRANS_DERIVE_NOT_ALLOW);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_ctkd_device_not_encrypted) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags &= ~BTM_SEC_ENCRYPTED;  // Not encrypted
++
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_XTRANS_DERIVE_NOT_ALLOW);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_ctkd_already_bonded_le_higher_security) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++
++  // LE link key is authed
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_LE_LINK_KEY_AUTHED;
++  // BR link key is NOT authed
++  p_dev_rec_->sec_rec.sec_flags &= ~BTM_SEC_LINK_KEY_AUTHED;
++
++  // Setup BLE keys so is_bonded(LE) logic passes
++  p_dev_rec_->sec_rec.set_le_link_key_known();
++  p_dev_rec_->sec_rec.ble_keys.key_type = BTM_LE_KEY_PENC;
++
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_XTRANS_DERIVE_NOT_ALLOW);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_encryption_key_size_too_small) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_LINK_KEY_AUTHED;
++
++  cb_.peer_enc_size = MIN_KEY_SIZE_DEFAULT - 1;  // Key size smaller than minimum required
++
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_ENC_KEY_SIZE);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_invalid_parameters) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_LINK_KEY_AUTHED;
++
++  cb_.peer_enc_size = 16;
++  cb_.peer_io_caps = BtIoCap::IO_CAP_UNKNOWN;
++
++  CallProcessPairingCommand();
++  EXPECT_EQ(cb_.status, SMP_INVALID_PARAMETERS);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_success_as_peripheral) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_LINK_KEY_AUTHED;
++
++  cb_.peer_enc_size = 16;
++  cb_.peer_io_caps = BtIoCap::NO_INPUT_NO_OUTPUT;  // Valid
++  cb_.role = HCI_ROLE_PERIPHERAL;
++
++  CallProcessPairingCommand();
++
++  EXPECT_EQ(cb_.status, SMP_SUCCESS);
++  EXPECT_EQ(cb_.cb_evt, SMP_BR_KEYS_REQ_EVT);
++  EXPECT_TRUE(cb_.flags & SMP_PAIR_FLAG_ENC_AFTER_PAIR);
++  EXPECT_TRUE(cb_.peer_auth_req & SMP_AUTH_BOND);
++  EXPECT_TRUE(cb_.loc_auth_req & SMP_AUTH_BOND);
++  EXPECT_FALSE(p_dev_rec_->sec_rec.new_encryption_key_is_p256);
++}
++
++TEST_F(SmpBrProcessPairingCommandTest, test_success_as_central) {
++  p_dev_rec_->sec_rec.bond_type = BOND_TYPE_PERSISTENT;
++  p_dev_rec_->sec_rec.set_link_key_known();
++  p_dev_rec_->sec_rec.link_key_type = BTM_LKEY_TYPE_UNAUTH_COMB_P_256;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_ENCRYPTED;
++  p_dev_rec_->sec_rec.sec_flags |= BTM_SEC_LINK_KEY_AUTHED;
++
++  cb_.peer_enc_size = 16;
++  cb_.peer_io_caps = BtIoCap::NO_INPUT_NO_OUTPUT;  // Valid
++  cb_.peer_i_key = 0x01;
++  cb_.peer_r_key = 0x02;
++  cb_.role = HCI_ROLE_CENTRAL;
++  cb_.cb_evt = SMP_EVT_NONE;
++
++  CallProcessPairingCommand();
++
++  EXPECT_EQ(cb_.status, SMP_SUCCESS);
++  // cb_evt should not be changed to SMP_BR_KEYS_REQ_EVT
++  EXPECT_NE(cb_.cb_evt, SMP_BR_KEYS_REQ_EVT);
++  EXPECT_EQ(cb_.local_i_key, cb_.peer_i_key);
++  EXPECT_EQ(cb_.local_r_key, cb_.peer_r_key);
++  EXPECT_TRUE(cb_.flags & SMP_PAIR_FLAG_ENC_AFTER_PAIR);
++  EXPECT_TRUE(cb_.peer_auth_req & SMP_AUTH_BOND);
++  EXPECT_TRUE(cb_.loc_auth_req & SMP_AUTH_BOND);
++  EXPECT_FALSE(p_dev_rec_->sec_rec.new_encryption_key_is_p256);
++}
+-- 
+2.55.0
+

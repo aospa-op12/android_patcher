@@ -1,7 +1,7 @@
-From bb564105c583a1648379670a73d34548124da77a Mon Sep 17 00:00:00 2001
+From 59feb8c71ca4855bb987af95970b02d5f0532f9a Mon Sep 17 00:00:00 2001
 From: Evan Severson <evanseverson@google.com>
 Date: Thu, 9 Apr 2026 08:40:44 -0700
-Subject: [PATCH 02/27] Check notification setting for given user
+Subject: [PATCH 02/49] Check notification setting for given user
 
 Test: Manual. New Mock test in following CL
 Bug: 466379087

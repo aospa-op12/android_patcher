@@ -1,7 +1,7 @@
-From 36854265ac1b0f3eea596b0589c7c16529d84679 Mon Sep 17 00:00:00 2001
+From 41e6a7afb59835aef8a95e978ca46384db7378cb Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Thu, 14 May 2026 13:48:21 -0700
-Subject: [PATCH 03/10] Remove btsec_sdp_database_thread_sync flag and old
+Subject: [PATCH 03/12] Remove btsec_sdp_database_thread_sync flag and old
  synchronization.
 
 This change removes the feature flag btsec_sdp_database_thread_sync and

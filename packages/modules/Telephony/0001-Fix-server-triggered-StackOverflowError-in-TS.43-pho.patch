@@ -1,0 +1,131 @@
+From 8ded3e5ca379c37fbc66c786130a343063ba88b7 Mon Sep 17 00:00:00 2001
+From: Hyein Yu <hyeinyu@google.com>
+Date: Thu, 2 Jul 2026 07:59:47 +0000
+Subject: [PATCH] Fix server-triggered StackOverflowError in TS.43 phone number
+ fetch
+
+A deeply nested JSON response could trigger an unbounded recursion in
+JSONTokener causing a StackOverflowError, which escaped the Exception
+catch block and crashed the process. This changes catch (Exception) to
+catch (Throwable) in Ts43PhoneNumberRetriever.java, and also adds catch
+(Throwable) in Ts43PhoneNumberController.java to gracefully handle
+unexpected Errors.
+
+Bug: 517377722
+Test: atest Ts43PhoneNumberRetrieverTest Ts43PhoneNumberControllerTest
+Flag: EXEMPT BUGFIX
+
+TAG=agy
+CONV=96a2cb83-a901-4037-81da-7fa7df3a933f
+
+(cherry picked from commit de8c73c03104687fdc52e14be9c1baf792c1bef8)
+Cherrypick-From: https://googleplex-android-review.googlesource.com/q/commit:332287647dda3657dbc2a4d39b3e72b9090547c7
+Merged-In: Ieef53664f3a25a2286c24d0b12c3132cfe94f562
+Change-Id: Ieef53664f3a25a2286c24d0b12c3132cfe94f562
+---
+ .../telephony/Ts43PhoneNumberController.java  |  4 +++
+ .../telephony/Ts43PhoneNumberRetriever.java   |  2 +-
+ .../tests/Ts43PhoneNumberControllerTest.java  | 25 ++++++++++++++++++
+ .../tests/Ts43PhoneNumberRetrieverTest.java   | 26 +++++++++++++++++++
+ 4 files changed, 56 insertions(+), 1 deletion(-)
+
+diff --git a/framework/java/com/android/internal/telephony/Ts43PhoneNumberController.java b/framework/java/com/android/internal/telephony/Ts43PhoneNumberController.java
+index a2bdb24..85c3955 100644
+--- a/framework/java/com/android/internal/telephony/Ts43PhoneNumberController.java
++++ b/framework/java/com/android/internal/telephony/Ts43PhoneNumberController.java
+@@ -233,6 +233,10 @@ public class Ts43PhoneNumberController extends Handler {
+         } catch (ServiceEntitlementException e) {
+             Rlogger.e(TAG, "TS.43 fetch failed for subId " + subId + ": " + e);
+             handleFetchFailure(subId, e);
++        } catch (Throwable t) {
++            Rlogger.e(TAG, "TS.43 fetch failed with unexpected error for subId "
++                    + subId + ": " + t);
++            queryCompleted(subId);
+         }
+     }
+ 
+diff --git a/framework/java/com/android/internal/telephony/Ts43PhoneNumberRetriever.java b/framework/java/com/android/internal/telephony/Ts43PhoneNumberRetriever.java
+index e7ab87e..b0dbea8 100644
+--- a/framework/java/com/android/internal/telephony/Ts43PhoneNumberRetriever.java
++++ b/framework/java/com/android/internal/telephony/Ts43PhoneNumberRetriever.java
+@@ -167,7 +167,7 @@ public class Ts43PhoneNumberRetriever {
+         } catch (ServiceEntitlementException e) {
+             Rlogger.w(TAG, "Propagating ServiceEntitlementException." + e.getErrorCode());
+             throw e;
+-        } catch (Exception e) {
++        } catch (Throwable e) {
+             Rlogger.e(TAG, "An unexpected exception occurred during phone number retrieval." + e);
+             return null;
+         }
+diff --git a/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberControllerTest.java b/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberControllerTest.java
+index 185097a..1a80810 100644
+--- a/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberControllerTest.java
++++ b/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberControllerTest.java
+@@ -298,4 +298,29 @@ public class Ts43PhoneNumberControllerTest {
+         verify(mTs43PhoneNumberRetriever, times(2)).fetchPhoneNumber(SUB_ID);
+         verifySetTs43PhoneNumberIsCalled(SUB_ID, FAKE_E164_PHONE_NUMBER);
+     }
++
++    @Test
++    public void testFetch_unexpectedError_releasesLock() throws ServiceEntitlementException {
++        givenTs43Enabled(true);
++        simulateNetworkState(true);
++        when(mTs43PhoneNumberRetriever.fetchPhoneNumber(SUB_ID))
++                .thenThrow(new StackOverflowError("Fake StackOverflowError"))
++                .thenReturn(FAKE_RAW_PHONE_NUMBER);
++
++        // Trigger first fetch (which throws Throwable)
++        mCarrierConfigChangeListener.onCarrierConfigChanged(0, SUB_ID, 0, 0);
++        mTestLooper.dispatchAll();
++
++        // Verify first fetch was called
++        verify(mTs43PhoneNumberRetriever, times(1)).fetchPhoneNumber(SUB_ID);
++
++        // Trigger second fetch (should NOT be skipped since queryCompleted should
++        // have cleared the state)
++        mCarrierConfigChangeListener.onCarrierConfigChanged(0, SUB_ID, 0, 0);
++        mTestLooper.dispatchAll();
++
++        // Verify second fetch was called (total 2 times)
++        verify(mTs43PhoneNumberRetriever, times(2)).fetchPhoneNumber(SUB_ID);
++        verifySetTs43PhoneNumberIsCalled(SUB_ID, FAKE_E164_PHONE_NUMBER);
++    }
+ }
+diff --git a/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberRetrieverTest.java b/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberRetrieverTest.java
+index be68bab..3e594db 100644
+--- a/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberRetrieverTest.java
++++ b/tests/unit/src/com/android/telephony/module/tests/Ts43PhoneNumberRetrieverTest.java
+@@ -208,4 +208,30 @@ public class Ts43PhoneNumberRetrieverTest {
+         // Then: The exception should be caught internally, and the method should return null.
+         assertNull(phoneNumber);
+     }
++
++    @Test
++    public void testFetchPhoneNumber_Failure_ThrowsThrowable() throws Exception {
++        // Given: The server URL is available.
++        mCarrierConfig.putString(CarrierConfigManager.ImsServiceEntitlement
++                .KEY_ENTITLEMENT_SERVER_URL_STRING, FAKE_SERVER_URL);
++
++        // Given: The authentication step succeeds.
++        Ts43Authentication.Ts43AuthToken mockAuthToken =
++                mock(Ts43Authentication.Ts43AuthToken.class);
++        when(mockAuthToken.token()).thenReturn(FAKE_TOKEN);
++        when(mMockTs43Auth.getAuthToken(anyInt(), any(), any(),
++                any(), anyString())).thenReturn(mockAuthToken);
++
++        // Given: The final phone number retrieval step throws a Throwable (e.g.,
++        // StackOverflowError).
++        when(mMockTs43Operation.getPhoneNumber(any(GetPhoneNumberRequest.class)))
++                .thenThrow(new StackOverflowError("Fake StackOverflowError"));
++
++        // When: Call the target method.
++        String phoneNumber = mRetriever.fetchPhoneNumber(FAKE_SUB_ID);
++
++        // Then: The Throwable should be caught internally, and the method should
++        // return null.
++        assertNull(phoneNumber);
++    }
+ }
+-- 
+2.55.0
+

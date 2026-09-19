@@ -1,7 +1,7 @@
-From 55b13e477e12c6ba2ce132f88954c1af3e67b784 Mon Sep 17 00:00:00 2001
+From 4075cd52b03f62d23755cd211833b120ca5a5c52 Mon Sep 17 00:00:00 2001
 From: Dmitry Dementyev <dementyev@google.com>
 Date: Thu, 7 May 2026 13:01:26 -0700
-Subject: [PATCH 12/27] Properly parse meta_key in AccountsDb.
+Subject: [PATCH 12/49] Properly parse meta_key in AccountsDb.
 
 Database entries are stored with "auth_uid_for_type:" prefix.
 Remove it properly in findMetaAuthUid.

@@ -1,7 +1,7 @@
-From e15ce05250a47248190c20d927882525d3750a66 Mon Sep 17 00:00:00 2001
+From 71be1738e7b83a135233886854dccad035f244cd Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Mon, 29 Jun 2026 13:21:30 -0700
-Subject: [PATCH 09/10] Fix out-of-bounds heap write in SnoopLogger
+Subject: [PATCH 09/12] Fix out-of-bounds heap write in SnoopLogger
 
 If specific Developer Options are enabled (such as SnoopLogger filtering active with the PBAP/MAP filter profile set to "magic"), a malicious Bluetooth controller can send a short HCI ACL packet that triggers a heap out-of-bounds write in `SnoopLogger::PayloadStrip()`. This occurs because a fixed string ('PROHIBITED') is written to the payload, and if the packet is extremely small (e.g., 8 bytes), the heap-allocated buffer does not have sufficient capacity.
 
