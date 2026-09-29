@@ -1,4 +1,4 @@
-From 70f8c173e1a58d3c10278f6390ea697dd04f8a1c Mon Sep 17 00:00:00 2001
+From c9c2b9162c4f677680ac70c1a3ffb4078f7e3005 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Wed, 24 Jun 2026 15:02:03 -0700
 Subject: [PATCH 08/12] Fix cross-thread UAF in AvrcpService updates

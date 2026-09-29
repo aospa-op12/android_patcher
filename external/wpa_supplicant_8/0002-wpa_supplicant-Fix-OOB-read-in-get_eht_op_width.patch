@@ -1,7 +1,7 @@
-From e477c789a469341ca96f921a6fb5334799a12e74 Mon Sep 17 00:00:00 2001
+From b3732d670f5ac95dc1ee0fd91d51cb934356eac1 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Thu, 30 Apr 2026 12:29:05 -0700
-Subject: [PATCH 2/4] wpa_supplicant: Fix OOB read in get_eht_op_width
+Subject: [PATCH 2/3] wpa_supplicant: Fix OOB read in get_eht_op_width
 
 EHT_OPERATION_ELEM_MIN_LEN was incorrectly defined as 1, which
 predated the addition of basic_eht_mcs_nss_set[4] to the
@@ -26,7 +26,7 @@ Change-Id: Ic94e85325e1c974105882b6f90ff5839f52c7141
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/common/ieee802_11_defs.h b/src/common/ieee802_11_defs.h
-index 15f5865..6eb69e8 100644
+index 15f5865c9..6eb69e8b3 100644
 --- a/src/common/ieee802_11_defs.h
 +++ b/src/common/ieee802_11_defs.h
 @@ -2765,7 +2765,7 @@ struct ieee80211_he_mu_edca_parameter_set {

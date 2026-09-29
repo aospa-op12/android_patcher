@@ -1,4 +1,4 @@
-From a2307e62860988e2daa63cc849fe598b78477083 Mon Sep 17 00:00:00 2001
+From 9b22776c589afbd4143c1c130cf2b976eeaf21bd Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 7 Jul 2026 10:42:39 -0700
 Subject: [PATCH 10/12] Fix buffer overflow in UUID parsing

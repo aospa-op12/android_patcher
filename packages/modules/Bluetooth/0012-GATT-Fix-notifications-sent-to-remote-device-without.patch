@@ -1,4 +1,4 @@
-From 9a11c901a7c3ab666892edeea2a0906fe7d3d541 Mon Sep 17 00:00:00 2001
+From 5ed15cd8a5ad557df87e2680870b06fa9f3b6731 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jakub=20Paw=C5=82owski?= <jpawlowski@google.com>
 Date: Fri, 19 Jun 2026 10:38:34 +0000
 Subject: [PATCH 12/12] GATT: Fix notifications sent to remote device without
@@ -48,7 +48,7 @@ index 0568ef452a1..88c07c89e81 100644
                btapp_gatts_conf_send_fail_cback(conn_id, status);
                return;
 diff --git a/system/stack/gatt/gatt_api.cc b/system/stack/gatt/gatt_api.cc
-index 365edec89b4..17009a15bc3 100644
+index 1c674592fb7..4be371d392d 100644
 --- a/system/stack/gatt/gatt_api.cc
 +++ b/system/stack/gatt/gatt_api.cc
 @@ -33,6 +33,7 @@
@@ -312,7 +312,7 @@ index 365edec89b4..17009a15bc3 100644
    tGATT_STATUS cmd_sent;
    tGATT_SR_MSG gatt_sr_msg;
    gatt_sr_msg.attr_value = notif;
-@@ -1508,7 +1577,6 @@ bool GATT_BR_Connect(tGATT_IF gatt_if, const RawAddress& bd_addr) {
+@@ -1534,7 +1603,6 @@ bool GATT_BR_Connect(tGATT_IF gatt_if, const RawAddress& bd_addr) {
                                                                                BTM_SEC_NONE);
    if (p_tcb->att_lcid == 0) {
      log::error("gatt_connect failed");
@@ -502,10 +502,10 @@ index b0d62944ca8..51e845c1124 100644
  /* gatt_sr_hash.cc */
  Octet16 gatts_calculate_database_hash(std::shared_ptr<std::list<tGATT_SRV_LIST_ELEM>> lst_ptr);
 diff --git a/system/stack/gatt/gatt_main.cc b/system/stack/gatt/gatt_main.cc
-index edf164473f5..d213002ecd5 100644
+index 87373f2c0fa..bc400cdb356 100644
 --- a/system/stack/gatt/gatt_main.cc
 +++ b/system/stack/gatt/gatt_main.cc
-@@ -128,8 +128,8 @@ void gatt_free(void) {
+@@ -129,8 +129,8 @@ void gatt_free(void) {
    for (i = 0; i < GATT_MAX_PHY_CHANNEL; i++) {
      gatt_cb.tcb[i].pending_enc_clcb = std::deque<tGATT_CLCB*>();
  
@@ -586,7 +586,7 @@ index 99365183923..65072eca893 100644
  }
  
 diff --git a/system/stack/gatt/gatt_utils.cc b/system/stack/gatt/gatt_utils.cc
-index 7d50e0df066..19d2899dfc5 100644
+index 079100ecb87..0c2e8c7a06d 100644
 --- a/system/stack/gatt/gatt_utils.cc
 +++ b/system/stack/gatt/gatt_utils.cc
 @@ -127,16 +127,8 @@ static uint16_t gatt_get_max_phy_channel() {

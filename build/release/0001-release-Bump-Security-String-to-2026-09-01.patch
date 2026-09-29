@@ -1,4 +1,4 @@
-From cd9995e49d1481dca7f540b02728b9f1dcae6284 Mon Sep 17 00:00:00 2001
+From 3cfa0e8ccd96352a18d85e09bd5935e7fbeb300e Mon Sep 17 00:00:00 2001
 From: Nolen Johnson <johnsonnolen@gmail.com>
 Date: Tue, 18 Aug 2026 23:55:42 -0400
 Subject: [PATCH] release: Bump Security String to 2026-09-01
@@ -109,13 +109,13 @@ Change-Id: I18b0b439f2e281d8877257ec9e88d1f20b1c9032
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/flag_values/cp2a/RELEASE_PLATFORM_SECURITY_PATCH.textproto b/flag_values/cp2a/RELEASE_PLATFORM_SECURITY_PATCH.textproto
-index 417b015..428fadb 100644
+index 9db302cfe..428fadbbd 100644
 --- a/flag_values/cp2a/RELEASE_PLATFORM_SECURITY_PATCH.textproto
 +++ b/flag_values/cp2a/RELEASE_PLATFORM_SECURITY_PATCH.textproto
 @@ -1,4 +1,4 @@
  name: "RELEASE_PLATFORM_SECURITY_PATCH"
  value: {
--  string_value: "2026-06-05"
+-  string_value: "2026-08-05"
 +  string_value: "2026-09-01"
  }
 -- 

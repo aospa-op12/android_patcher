@@ -1,4 +1,4 @@
-From 2b43394e33b013cf9802d136d29f6ae99a157d45 Mon Sep 17 00:00:00 2001
+From 91d6876d76c0f5feff788b8e2ec3abaaac490108 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Thu, 30 Apr 2026 11:07:19 -0700
 Subject: [PATCH 01/12] Unflag remove_bond_caller_info
@@ -23,10 +23,10 @@ Change-Id: Idcfc017de481004c27b072327879b3fa1c10e93b
  2 files changed, 1 insertion(+), 12 deletions(-)
 
 diff --git a/android/app/src/com/android/bluetooth/btservice/AdapterService.java b/android/app/src/com/android/bluetooth/btservice/AdapterService.java
-index 2ea76965033..69e48200c2c 100644
+index d5911f9969c..81ea209eb28 100644
 --- a/android/app/src/com/android/bluetooth/btservice/AdapterService.java
 +++ b/android/app/src/com/android/bluetooth/btservice/AdapterService.java
-@@ -4641,7 +4641,7 @@ public class AdapterService extends Service {
+@@ -4648,7 +4648,7 @@ public class AdapterService extends Service {
          mStorage.onBondStateChanged(device, fromState, toState);
  
          // Remove the bond caller info when bonding is concluded

@@ -1,4 +1,4 @@
-From 5c0700b31d42643881172dfddba37f2f2b35e20b Mon Sep 17 00:00:00 2001
+From a5553e53d69bb69be1b978ba4b59d8c2793d6855 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 16 Jun 2026 11:07:21 -0700
 Subject: [PATCH 11/12] [RESTRICT AUTOMERGE] Enforce incoming CTKD security
@@ -28,9 +28,9 @@ Change-Id: Ib6812bb68095a7ce745e5dba9feb4ba565d966e7
  system/bta/dm/bta_dm_sec.cc            |   2 +
  system/stack/btm/btm_sec.cc            |  11 +-
  system/stack/btm/btm_security_record.h |   4 +
- system/stack/smp/smp_act.cc            |  66 +++++---
+ system/stack/smp/smp_act.cc            |  95 ++++++-----
  system/stack/test/stack_smp_test.cc    | 222 +++++++++++++++++++++++++
- 5 files changed, 280 insertions(+), 25 deletions(-)
+ 5 files changed, 292 insertions(+), 42 deletions(-)
 
 diff --git a/system/bta/dm/bta_dm_sec.cc b/system/bta/dm/bta_dm_sec.cc
 index 7b78f4ab8a9..b818873e1ad 100644
@@ -46,7 +46,7 @@ index 7b78f4ab8a9..b818873e1ad 100644
          // TODO This is not a proper use of this type
          sec_event.auth_cmpl.fail_reason = static_cast<tHCI_STATUS>(
 diff --git a/system/stack/btm/btm_sec.cc b/system/stack/btm/btm_sec.cc
-index a48759d8b55..c26feed0365 100644
+index 2d540e0ee64..b1113d9ca35 100644
 --- a/system/stack/btm/btm_sec.cc
 +++ b/system/stack/btm/btm_sec.cc
 @@ -3539,7 +3539,9 @@ void btm_sec_encryption_change_evt(uint16_t handle, tHCI_STATUS status, uint8_t
@@ -75,10 +75,10 @@ index a48759d8b55..c26feed0365 100644
      }
    }
 diff --git a/system/stack/btm/btm_security_record.h b/system/stack/btm/btm_security_record.h
-index 9dc800d0a74..4a0e68759a5 100644
+index 60e3d0d9879..b42b7b2e647 100644
 --- a/system/stack/btm/btm_security_record.h
 +++ b/system/stack/btm/btm_security_record.h
-@@ -164,6 +164,10 @@ struct BtmSecurityRecord {
+@@ -167,6 +167,10 @@ struct BtmSecurityRecord {
                                        name */
    BtIoCap rmt_io_caps;             /* IO capability of the peer device */
    tBTM_AUTH_REQ rmt_auth_req;      /* the auth_req flag as in the IO caps rsp evt */
@@ -90,10 +90,10 @@ index 9dc800d0a74..4a0e68759a5 100644
    /* Whether BR/EDR pairing succeeded recently. Helps decide whether to perform CTKD or not */
    enum class BrEdrScEncReason : uint8_t {
 diff --git a/system/stack/smp/smp_act.cc b/system/stack/smp/smp_act.cc
-index 0c3911113df..17544778053 100644
+index abee9881487..a07f7258d22 100644
 --- a/system/stack/smp/smp_act.cc
 +++ b/system/stack/smp/smp_act.cc
-@@ -855,30 +855,42 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+@@ -855,47 +855,42 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
  
    log::verbose("addr:{}", p_cb->pairing_bda);
  
@@ -124,6 +124,23 @@ index 0c3911113df..17544778053 100644
      return;
    }
  
+-  /* erase all keys if it is peripheral proc pairing req */
+-  if (p_device && (p_cb->role == HCI_ROLE_PERIPHERAL)) {
+-    if (stack_config_get_interface()->get_pts_smp_bredr_pairing_preserve_le_keys()) {
+-      /* UNLESS the existing LE keys are already authenticated (strong).
+-         This protects strong LE keys from being wiped by a potentially weaker BR/EDR pairing. */
+-      bool le_authed = p_device->sec_rec.sec_flags & BTM_SEC_LE_LINK_KEY_AUTHED;
+-      if (!le_authed) {
+-        log::verbose("Existing LE keys are not authenticated. Clearing them for fresh BR/EDR pairing.");
+-        btm_sec_clear_ble_keys(p_device);
+-      } else {
+-        log::verbose("Existing LE keys are authenticated. Preserving them during BR/EDR pairing.");
+-      }
+-    } else {
+-      btm_sec_clear_ble_keys(p_device);
+-    }
+-  }
+-
 -  /* erase all keys if it is peripheral proc pairing req*/
 -  if (p_device && (p_cb->role == HCI_ROLE_PERIPHERAL)) {
 -    btm_sec_clear_ble_keys(p_device);
@@ -149,7 +166,7 @@ index 0c3911113df..17544778053 100644
      smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
      return;
    }
-@@ -897,27 +909,29 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+@@ -914,27 +909,41 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
    if (p_cb->peer_enc_size < min_key_size) {
      log::warn("Encryption key size {} smaller than the minimum {}", p_cb->peer_enc_size,
                min_key_size);
@@ -182,11 +199,23 @@ index 0c3911113df..17544778053 100644
  
    if (p_cb->role == HCI_ROLE_PERIPHERAL) {
      p_device->sec_rec.bredr_sc_enc_reason = BtmSecurityRecord::BrEdrScEncReason::OTHER;
-+    btm_sec_clear_ble_keys(p_device);   /* Erase all prior LE keys */
++    if (stack_config_get_interface()->get_pts_smp_bredr_pairing_preserve_le_keys()) {
++      /* Preserve authenticated LE keys when the incoming BR/EDR pairing is weaker. */
++      bool le_authed = p_device->sec_rec.sec_flags & BTM_SEC_LE_LINK_KEY_AUTHED;
++      if (!le_authed) {
++        log::verbose(
++                "Existing LE keys are not authenticated. Clearing them for fresh BR/EDR pairing.");
++        btm_sec_clear_ble_keys(p_device);
++      } else {
++        log::verbose("Existing LE keys are authenticated. Preserving them during BR/EDR pairing.");
++      }
++    } else {
++      btm_sec_clear_ble_keys(p_device);
++    }
      /* shortcut to skip Security Grant step */
      p_cb->cb_evt = SMP_BR_KEYS_REQ_EVT;
    } else {
-@@ -926,10 +940,14 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
+@@ -943,10 +952,14 @@ void smp_br_process_pairing_command(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
              "central rcvs valid PAIRING RESPONSE. Supposed to move to key distribution phase.");
    }
  

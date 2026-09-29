@@ -1,7 +1,7 @@
-From 87361a900eea3c280edf97beea6715f566af8892 Mon Sep 17 00:00:00 2001
+From 0d419075233a6707ca553149a4efd51f7cd4ee5a Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Thu, 7 May 2026 19:31:28 -0700
-Subject: [PATCH 1/4] Fix P2P2 PBMA Cookie Heap Overflow and harden
+Subject: [PATCH 1/3] Fix P2P2 PBMA Cookie Heap Overflow and harden
  wpa_supplicant/hostapd
 
 A malicious WiFi Direct peer can overflow the heap of wpa_supplicant by responding to a P2P2 bootstrap Provision Discovery Request with an oversized cookie length in the PBMA attribute. This change adds a bounds check for the cookie length.
@@ -20,7 +20,7 @@ Change-Id: Ic3c75644dbb7b3ea278335e977ad428ae14d9709
  2 files changed, 7 insertions(+)
 
 diff --git a/src/p2p/p2p_pd.c b/src/p2p/p2p_pd.c
-index d9bff5a..09339fc 100644
+index d9bff5a68..09339fc63 100644
 --- a/src/p2p/p2p_pd.c
 +++ b/src/p2p/p2p_pd.c
 @@ -766,6 +766,12 @@ static void p2p_process_prov_disc_bootstrap_req(struct p2p_data *p2p,
@@ -37,10 +37,10 @@ index d9bff5a..09339fc 100644
  
  		if (!dev->bootstrap_params ||
 diff --git a/wpa_supplicant/Android.bp b/wpa_supplicant/Android.bp
-index dc453a0..08235b9 100644
+index 86c43e53c..f4e49821b 100644
 --- a/wpa_supplicant/Android.bp
 +++ b/wpa_supplicant/Android.bp
-@@ -698,6 +698,7 @@ cc_library {
+@@ -701,6 +701,7 @@ cc_library {
          misc_undefined: [
              "unsigned-integer-overflow",
              "signed-integer-overflow",
