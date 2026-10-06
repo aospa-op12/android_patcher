@@ -1,7 +1,7 @@
-From d5a403986fb621ca59af184f37d6045f45644328 Mon Sep 17 00:00:00 2001
+From f66b83d1aeda22ec42be4c501f2038cf7e1082c3 Mon Sep 17 00:00:00 2001
 From: Darshil Shah <darshilshah@google.com>
 Date: Fri, 29 May 2026 10:33:07 +0000
-Subject: [PATCH 21/49] Validate caller UID in openProxyFileDescriptor
+Subject: [PATCH 21/51] Validate caller UID in openProxyFileDescriptor
 
 Ensure that the calling UID matches the owner UID of the AppFuse mount
 before opening the file descriptor to prevent unauthorized cross-app access.
@@ -60,5 +60,5 @@ index 292314840efb..d839b30ddf44 100644
              }
          }
 -- 
-2.55.0
+2.56.0
 

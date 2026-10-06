@@ -1,7 +1,7 @@
-From f24106f2c8505caed0c89274ff1bfe773729dd26 Mon Sep 17 00:00:00 2001
+From ddbb4c991407a7ec9827c091e9e5913687cd67ba Mon Sep 17 00:00:00 2001
 From: Achim Thesmann <achim@google.com>
 Date: Mon, 6 Jul 2026 21:38:34 +0000
-Subject: [PATCH 48/49] [26Q2] Mitigate BAL bypass via Companion Device Manager
+Subject: [PATCH 48/51] [26Q2] Mitigate BAL bypass via Companion Device Manager
 
 Combine short-term mitigation and unconditional enforcement:
 Ensure calling UIDs attempting CDM association are in
@@ -47,5 +47,5 @@ index c680924410e2..9ffa7c79bf96 100644
                  checkCallerCanSkipRoleGrant();
                  mAssociationRequestsProcessor.createAssociation(userId, packageName,
 -- 
-2.55.0
+2.56.0
 

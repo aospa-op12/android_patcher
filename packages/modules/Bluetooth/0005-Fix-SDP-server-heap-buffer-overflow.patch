@@ -1,7 +1,7 @@
-From a09656e254b316dfb3e308aa812d69d8eeedd740 Mon Sep 17 00:00:00 2001
+From 8b5067bf987a43f29c010baa48acefcbd2c9f9f7 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Thu, 18 Jun 2026 20:43:20 -0700
-Subject: [PATCH 05/12] Fix SDP server heap buffer overflow
+Subject: [PATCH 05/13] Fix SDP server heap buffer overflow
 
 This change addresses a heap buffer overflow vulnerability in the SDP
 server where an oversized attribute could be serialized into a fixed
@@ -369,5 +369,5 @@ index 3b25a1b0f9e..18e29fd9636 100644
 +  ASSERT_EQ(offset, 5);
 +}
 -- 
-2.55.0
+2.56.0
 

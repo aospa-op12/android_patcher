@@ -1,7 +1,7 @@
-From 5246f5e3d267543f5778ed233e6d601757e3b2ed Mon Sep 17 00:00:00 2001
+From 6ef653c8bf1e7d0677d106df6b67edb51f7ea731 Mon Sep 17 00:00:00 2001
 From: Prabal Singh <prabalsingh@google.com>
 Date: Fri, 8 May 2026 09:19:52 +0000
-Subject: [PATCH 28/49] Set min_sdk_version in GooglePackageInstaller
+Subject: [PATCH 28/51] Set min_sdk_version in GooglePackageInstaller
 
 This change sets the min_sdk_version for GooglePackageInstaller to 36. This also adds some checks to make sure APIs are only called when they are available.
 
@@ -290,5 +290,5 @@ index 7c0194040801..0995f32b624d 100644
          val stage =
              repository.setRetryVerificationUserResponse()
 -- 
-2.55.0
+2.56.0
 

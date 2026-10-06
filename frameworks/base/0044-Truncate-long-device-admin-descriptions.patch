@@ -1,7 +1,7 @@
-From 4073974eaac62b92d6fc4eba93b7df34c841dfc4 Mon Sep 17 00:00:00 2001
+From 7b710b07ba9501602084eab9872200a0cbf994bb Mon Sep 17 00:00:00 2001
 From: Gabriel Roman <gabrielroman@google.com>
 Date: Fri, 15 May 2026 07:02:42 -0700
-Subject: [PATCH 44/49] Truncate long device admin descriptions
+Subject: [PATCH 44/51] Truncate long device admin descriptions
 
 Limit the length of the description loaded from a device admin's
 manifest to a maximum of 1024 characters. This prevents potential issues
@@ -110,5 +110,5 @@ index 893cf86c6351..ed503229aef8 100644
       * Return whether this component and its enclosing application are enabled.
       */
 -- 
-2.55.0
+2.56.0
 

@@ -1,7 +1,7 @@
-From 111d31a417ceaaf5e1d8b6a8663c72f59ff84536 Mon Sep 17 00:00:00 2001
+From ccba6b425563aea9910b4b977c50f8e7d89c9d04 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 26 May 2026 11:27:42 -0700
-Subject: [PATCH 04/12] Fix heap buffer overflow in A2DP Opus decoder
+Subject: [PATCH 04/13] Fix heap buffer overflow in A2DP Opus decoder
 
 The A2DP Opus decoder passes the buffer size in bytes to opus_decode()
 where it expects samples-per-channel. This allows a crafted Opus
@@ -160,5 +160,5 @@ index eb517fd9a84..c8b3f78df66 100644
  }  // namespace testing
  }  // namespace bluetooth
 -- 
-2.55.0
+2.56.0
 

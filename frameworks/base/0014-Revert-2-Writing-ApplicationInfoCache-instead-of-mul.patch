@@ -1,7 +1,7 @@
-From 18fa3a3b4b4fe7c80111721d4a60543fa5533ea6 Mon Sep 17 00:00:00 2001
+From 6aee1a559e1e3c49b1c6ecc6563b11ef9fd0551d Mon Sep 17 00:00:00 2001
 From: Vipul Singh <imvipul@google.com>
 Date: Sun, 10 May 2026 23:47:51 -0700
-Subject: [PATCH 14/49] Revert^2 "Writing ApplicationInfoCache instead of
+Subject: [PATCH 14/51] Revert^2 "Writing ApplicationInfoCache instead of
  multiple ApplicationInfos for nested RemoteViews"
 
 This reverts commit 532a0a90b30a8045efdf1b0a84249a2352482607.
@@ -269,5 +269,5 @@ index 09a2fd1c5a51..baaaee43c352 100644
                  appResources = appContext.getResources();
  
 -- 
-2.55.0
+2.56.0
 

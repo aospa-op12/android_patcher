@@ -1,7 +1,7 @@
-From 1ffad96b63286de5f97f593c662fb80bc39fec7b Mon Sep 17 00:00:00 2001
+From 1fe9b893a7b4ea5193b1d2cb9c9816e6af6d6a91 Mon Sep 17 00:00:00 2001
 From: Jeremy Meyer <jakmcbane@google.com>
 Date: Thu, 21 May 2026 15:46:02 -0700
-Subject: [PATCH 24/49] ResStringPool: Validate styleCount and offsets
+Subject: [PATCH 24/51] ResStringPool: Validate styleCount and offsets
 
 ResStringPool::setTo fails to validate that the style-index array fits
 within the data chunk when stringCount is zero, as it was skipping
@@ -162,5 +162,5 @@ index 8ef1d0be0a3f..0fe6b225e4f3 100644
    struct MockResXMLTree {
      ResXMLTree_header header;
 -- 
-2.55.0
+2.56.0
 

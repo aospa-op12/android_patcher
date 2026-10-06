@@ -1,7 +1,7 @@
-From 6e0fb5ae434b345342423615984016fbfb06e945 Mon Sep 17 00:00:00 2001
+From 8ccba37b408d5d30b9939804d8069f0925466458 Mon Sep 17 00:00:00 2001
 From: Nan Wu <wnan@google.com>
 Date: Wed, 1 Apr 2026 10:49:39 -0700
-Subject: [PATCH 05/49] Fix intent redirect bypass via selector in
+Subject: [PATCH 05/51] Fix intent redirect bypass via selector in
  addCreatorToken
 
   When evaluating whether to append a creator token to an intent in
@@ -48,5 +48,5 @@ index 1b01fc1400c2..09af1daf4c06 100644
                  targetPackage);
          final boolean noExtraIntentKeys =
 -- 
-2.55.0
+2.56.0
 

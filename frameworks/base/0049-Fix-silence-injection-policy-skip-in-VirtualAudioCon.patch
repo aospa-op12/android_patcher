@@ -1,7 +1,7 @@
-From 76ef10c36986b30df21ed8903538b9aac9fed28a Mon Sep 17 00:00:00 2001
+From 116d5cfdd6351bf90013cbe6dcf5b637f01e603f Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Wed, 27 May 2026 14:34:15 -0700
-Subject: [PATCH 49/49] Fix silence-injection policy skip in
+Subject: [PATCH 49/51] Fix silence-injection policy skip in
  VirtualAudioController
 
 Unconditionally register mAudioPlaybackDetector in startListening to ensure the deferred silence injection policy update recovers correctly. Conditionally register mAudioRecordingDetector only when configChangedCallback is provided.
@@ -32,5 +32,5 @@ index 92af755813fe..051a2331be69 100644
          }
      }
 -- 
-2.55.0
+2.56.0
 

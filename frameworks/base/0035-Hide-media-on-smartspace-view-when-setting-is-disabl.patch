@@ -1,7 +1,7 @@
-From 3814e4c39a15df05b72b2b985e624bfbafa4c89a Mon Sep 17 00:00:00 2001
+From 26ce4c5ee9a031f23f876c2b9a220aa484bd814b Mon Sep 17 00:00:00 2001
 From: Michael Mikhail <michaelmikhil@google.com>
 Date: Thu, 23 Apr 2026 21:19:19 +0000
-Subject: [PATCH 35/49] Hide media on smartspace view when setting is disabled
+Subject: [PATCH 35/51] Hide media on smartspace view when setting is disabled
 
 Flag: EXEMPT BUGFIX
 Bug: 478725173
@@ -211,5 +211,5 @@ index e941a159fa65..2d067ae95987 100644
      }
  
 -- 
-2.55.0
+2.56.0
 

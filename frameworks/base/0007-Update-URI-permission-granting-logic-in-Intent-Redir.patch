@@ -1,7 +1,7 @@
-From 78a2611406539bf0b49a5383cf6dc004ded3ee0f Mon Sep 17 00:00:00 2001
+From 17ca46c9202a8f98e4b9a10558e296d3fa6db5a2 Mon Sep 17 00:00:00 2001
 From: Yang Kudurshian <scarlety@google.com>
 Date: Tue, 24 Mar 2026 09:54:43 -0700
-Subject: [PATCH 07/49] Update URI permission granting logic in Intent
+Subject: [PATCH 07/51] Update URI permission granting logic in Intent
  Redirection Hardening
 
 Updating the Intent URI Grant Permission logic to require explicit authorization from both callingUid and the intentCreatorUid.
@@ -103,5 +103,5 @@ index f085ef1c0b0e..ece2b982dea7 100644
                          } catch (SecurityException securityException) {
                              logAndThrowExceptionForIntentRedirect(supervisor.mService.mContext,
 -- 
-2.55.0
+2.56.0
 

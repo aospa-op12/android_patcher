@@ -1,7 +1,7 @@
-From 6ff2a9938efb12e722d4fb36f0df628504ab643f Mon Sep 17 00:00:00 2001
+From ee6cc90a04ed979b1e830a4b8759ceeee11976a2 Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Mon, 27 Apr 2026 15:47:29 -0700
-Subject: [PATCH 19/49] Fix security check bypass
+Subject: [PATCH 19/51] Fix security check bypass
 
 Ensure that security checks (mime type and size limits) are applied
 in all image resolution paths. Previously, the checks were only in
@@ -109,5 +109,5 @@ index 474e3c3f010b..31acda8b2bf6 100644
 +    }
  }
 -- 
-2.55.0
+2.56.0
 

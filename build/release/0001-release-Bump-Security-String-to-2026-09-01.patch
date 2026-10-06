@@ -1,7 +1,7 @@
-From 3cfa0e8ccd96352a18d85e09bd5935e7fbeb300e Mon Sep 17 00:00:00 2001
+From 639373d88f4d46abc53120731e02d1e8721a53fb Mon Sep 17 00:00:00 2001
 From: Nolen Johnson <johnsonnolen@gmail.com>
 Date: Tue, 18 Aug 2026 23:55:42 -0400
-Subject: [PATCH] release: Bump Security String to 2026-09-01
+Subject: [PATCH 1/2] release: Bump Security String to 2026-09-01
 
 Implemented:
 ============
@@ -119,5 +119,5 @@ index 9db302cfe..428fadbbd 100644
 +  string_value: "2026-09-01"
  }
 -- 
-2.55.0
+2.56.0
 

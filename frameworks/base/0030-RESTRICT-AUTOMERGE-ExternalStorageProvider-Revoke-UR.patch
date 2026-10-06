@@ -1,7 +1,7 @@
-From bb25b6bf9a02ec3f11558e98c78e2fa49a4ebed0 Mon Sep 17 00:00:00 2001
+From 0cf79285392d0bbda8739cb8f764cccf5c643bee Mon Sep 17 00:00:00 2001
 From: Himanshu Arora <hmarora@google.com>
 Date: Sun, 15 Mar 2026 14:49:12 +0000
-Subject: [PATCH 30/49] RESTRICT AUTOMERGE [ExternalStorageProvider] Revoke URI
+Subject: [PATCH 30/51] RESTRICT AUTOMERGE [ExternalStorageProvider] Revoke URI
  permissions by path
 
 Add support for revoking URI permissions associated with a specific file path. This is handled via a new revoke_uri_permission call that resolves the path to a document URI and revokes all its permissions.
@@ -83,5 +83,5 @@ index 2fac7a6c65fc..93c08e89693e 100644
          return TextUtils.equals(a.toLowerCase(Locale.ROOT), b.toLowerCase(Locale.ROOT));
      }
 -- 
-2.55.0
+2.56.0
 

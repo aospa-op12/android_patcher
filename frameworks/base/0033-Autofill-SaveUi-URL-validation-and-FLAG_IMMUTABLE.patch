@@ -1,7 +1,7 @@
-From e9a7a5b99c5ebaf62743eb7b4fe6a6936ce6db3c Mon Sep 17 00:00:00 2001
+From af4e106d7e8d67cd0594f56ad3be23736c36bd3f Mon Sep 17 00:00:00 2001
 From: Yutong Zhang <zhangyutong@google.com>
 Date: Thu, 30 Apr 2026 06:09:20 +0000
-Subject: [PATCH 33/49] Autofill SaveUi URL validation and FLAG_IMMUTABLE
+Subject: [PATCH 33/51] Autofill SaveUi URL validation and FLAG_IMMUTABLE
 
 This change enhances the security of the Autofill Save UI by strictly enforcing http and https schemes for custom description links, preventing custom scheme hijacking. Additionally, it switches the PendingIntent created in SaveUi to be immutable (FLAG_IMMUTABLE), preventing potential intent manipulation by recipient applications.
 
@@ -155,5 +155,5 @@ index 369fc0aa7d11..55dfb6f4b2db 100644
  
      private void setServiceIcon(Context context, View view, Drawable serviceIcon) {
 -- 
-2.55.0
+2.56.0
 

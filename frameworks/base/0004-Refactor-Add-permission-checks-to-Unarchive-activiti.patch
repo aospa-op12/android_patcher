@@ -1,7 +1,7 @@
-From e970406c4102d0a81f69ae165ee5dd707bebab48 Mon Sep 17 00:00:00 2001
+From 1349ef297c3a55c2d2f3ee6b1f76571e997db7ce Mon Sep 17 00:00:00 2001
 From: Prabal Singh <prabalsingh@google.com>
 Date: Thu, 9 Apr 2026 09:01:09 -0700
-Subject: [PATCH 04/49] Refactor: Add permission checks to Unarchive activities
+Subject: [PATCH 04/51] Refactor: Add permission checks to Unarchive activities
 
 It adds permission checks for REQUEST_INSTALL_PACKAGES or INSTALL_PACKAGES to both UnarchiveActivity and UnarchiveErrorActivity at the start of their onCreate methods. The launch of the v2 UnarchiveLaunch activity is now gated by these permission checks.
 
@@ -275,5 +275,5 @@ index c51bc512691b..d217689998d7 100644
              Intent piaV2 = new Intent(getIntent());
              piaV2.putExtra(UnarchiveLaunch.EXTRA_CALLING_PKG_NAME, getLaunchedFromPackage());
 -- 
-2.55.0
+2.56.0
 

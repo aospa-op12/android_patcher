@@ -1,7 +1,7 @@
-From 3c70e5ea62158b5a09445065ab362ddbfed4990c Mon Sep 17 00:00:00 2001
+From bb4c4f2b670b96af372f0483df4c52a0d00136d9 Mon Sep 17 00:00:00 2001
 From: Taso Dane <taso@google.com>
 Date: Fri, 1 May 2026 02:40:50 -0700
-Subject: [PATCH 18/49] Strip URI grants in ConfigActivityProxy
+Subject: [PATCH 18/51] Strip URI grants in ConfigActivityProxy
 
 AppWidgetConfigActivityProxy is a system-privileged activity that
 relays the result of a widget configuration activity back to the
@@ -229,5 +229,5 @@ index 000000000000..2a2a29c3fc22
 +  ]
 +}
 -- 
-2.55.0
+2.56.0
 

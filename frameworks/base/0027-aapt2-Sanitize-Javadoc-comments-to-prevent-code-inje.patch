@@ -1,7 +1,7 @@
-From f02996b075a3a7f0ff9e3df5456dae4bab6d926f Mon Sep 17 00:00:00 2001
+From 9e371e582b53db2706056a1517408815e68767c6 Mon Sep 17 00:00:00 2001
 From: Mark Punzalan <markpun@google.com>
 Date: Mon, 22 Jun 2026 15:21:44 -0700
-Subject: [PATCH 27/49] aapt2: Sanitize Javadoc comments to prevent code
+Subject: [PATCH 27/51] aapt2: Sanitize Javadoc comments to prevent code
  injection
 
 Prevent Javadoc breakout and arbitrary code injection in generated
@@ -113,5 +113,5 @@ index 6d6cc2089686..c0c3c93bd629 100644
 +
  }  // namespace aapt
 -- 
-2.55.0
+2.56.0
 

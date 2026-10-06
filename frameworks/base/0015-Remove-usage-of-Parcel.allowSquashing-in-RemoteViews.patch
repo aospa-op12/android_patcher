@@ -1,7 +1,7 @@
-From fa1360bcc2e8a9a3dd831f5dd9029c8a6f4ce77f Mon Sep 17 00:00:00 2001
+From 5c4dc5e6c335ce0d0c437b8c4e3c501dc5d185d3 Mon Sep 17 00:00:00 2001
 From: Vipul Singh <imvipul@google.com>
 Date: Wed, 6 May 2026 11:06:19 -0700
-Subject: [PATCH 15/49] Remove usage of Parcel.allowSquashing in RemoteViews
+Subject: [PATCH 15/51] Remove usage of Parcel.allowSquashing in RemoteViews
  and immediate unparceling of Bundle
 
 Squashing was added for application info but it doesn't work so mApplicationInfoCache was also added. Removing this from RemoteView as its redundant. And removed early unparceling of Bundle in ReflectionAction.
@@ -71,5 +71,5 @@ index baaaee43c352..1318f4c85d78 100644
  
      private void writeActionsToParcel(Parcel parcel, int flags) {
 -- 
-2.55.0
+2.56.0
 

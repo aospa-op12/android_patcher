@@ -1,7 +1,7 @@
-From 3d2ef1dec358c4a7e3ca9b06f6fdaa2043642b77 Mon Sep 17 00:00:00 2001
+From ca5cd78b42762f2a8faa6b3ef8430c9d893ad63f Mon Sep 17 00:00:00 2001
 From: chihtinglo <chihtinglo@google.com>
 Date: Thu, 21 May 2026 10:45:15 +0000
-Subject: [PATCH 38/49] Move input sink on top of the Activity when needed
+Subject: [PATCH 38/51] Move input sink on top of the Activity when needed
 
 An Activity below the TaskFragments could be exposed to user touches
 since (1) the upper TaskFragments do not fill the entire Task, and (2)
@@ -354,5 +354,5 @@ index 675836aafe2c..92a292272001 100644
          MotionEvent down = MotionEvent.obtain(SystemClock.uptimeMillis(),
                  SystemClock.uptimeMillis(), MotionEvent.ACTION_DOWN, x, y, 0);
 -- 
-2.55.0
+2.56.0
 

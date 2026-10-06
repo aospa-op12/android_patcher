@@ -1,7 +1,7 @@
-From 63675cbdb885920e259772634b8c44d0dfa8de0d Mon Sep 17 00:00:00 2001
+From 927c5cb277e4d43eb9b69ee2289c34cf5cb7f2fd Mon Sep 17 00:00:00 2001
 From: Himanshu Arora <hmarora@google.com>
 Date: Sun, 12 Apr 2026 09:17:01 +0000
-Subject: [PATCH 31/49] RESTRICT AUTOMERGE Filter ignorable Unicode codepoints
+Subject: [PATCH 31/51] RESTRICT AUTOMERGE Filter ignorable Unicode codepoints
  in ExternalStorageProvider
 
 Normalize directory paths by filtering out ignorable Unicode codepoints before performing block checks.
@@ -163,5 +163,5 @@ index 8664159397e5..f06bc7915f9a 100644
      private static String buildDocId(@NonNull String path) {
          return buildDocId(EXTERNAL_STORAGE_PRIMARY_EMULATED_ROOT_ID, path);
 -- 
-2.55.0
+2.56.0
 

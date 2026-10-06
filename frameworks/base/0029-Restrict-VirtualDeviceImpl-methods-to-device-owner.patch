@@ -1,7 +1,7 @@
-From 5f91f81f196cb9d0dbb460f0632b486f1b1fdc1a Mon Sep 17 00:00:00 2001
+From 7cdad9684b80043adf04b237ee62fbd085b64d14 Mon Sep 17 00:00:00 2001
 From: Biswarup Pal <biswarupp@google.com>
 Date: Wed, 29 Apr 2026 12:04:35 -0700
-Subject: [PATCH 29/49] Restrict VirtualDeviceImpl methods to device owner.
+Subject: [PATCH 29/51] Restrict VirtualDeviceImpl methods to device owner.
 
 Add checkCallerIsDeviceOwner() to setListeners, close, getVirtualCameraId, and playSoundEffect to ensure only the owning application can call these methods.
 
@@ -67,5 +67,5 @@ index 410e80a77fe2..4f170f51f27d 100644
      }
  
 -- 
-2.55.0
+2.56.0
 

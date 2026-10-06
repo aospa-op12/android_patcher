@@ -1,7 +1,7 @@
-From a5553e53d69bb69be1b978ba4b59d8c2793d6855 Mon Sep 17 00:00:00 2001
+From 54b717d418495f0ac84e8386f6b7be8a9fafa756 Mon Sep 17 00:00:00 2001
 From: Brian Delwiche <delwiche@google.com>
 Date: Tue, 16 Jun 2026 11:07:21 -0700
-Subject: [PATCH 11/12] [RESTRICT AUTOMERGE] Enforce incoming CTKD security
+Subject: [PATCH 11/13] [RESTRICT AUTOMERGE] Enforce incoming CTKD security
  requirements
 
 This change enforces strict pairing and encryption requirements for
@@ -477,5 +477,5 @@ index 2802da41bd4..c0201793ff3 100644
 +  EXPECT_FALSE(p_dev_rec_->sec_rec.new_encryption_key_is_p256);
 +}
 -- 
-2.55.0
+2.56.0
 

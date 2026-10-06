@@ -1,7 +1,7 @@
-From 493c1707b768b415af9914b7b55ebfea3a23292b Mon Sep 17 00:00:00 2001
+From 80064897760886ac8c77c94a2a40cdacc34f7bd9 Mon Sep 17 00:00:00 2001
 From: Omar Eissa <oeissa@google.com>
 Date: Wed, 29 Apr 2026 08:17:15 +0000
-Subject: [PATCH 11/49] Don't parse 3p recognizer metadata in safe mode
+Subject: [PATCH 11/51] Don't parse 3p recognizer metadata in safe mode
 
 Malicious apps could put large xml recognition service metadata file
 that could lead to crash the system. Making sure that we don't parse
@@ -86,5 +86,5 @@ index 149744714a3d..e2847f3ad974 100644
                  Slog.w(TAG, "no available voice recognition services found for user " + userHandle);
                  return null;
 -- 
-2.55.0
+2.56.0
 

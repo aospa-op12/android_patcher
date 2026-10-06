@@ -1,7 +1,7 @@
-From 3b5ba6ecfe622adb1d962cd9e6392ac0ed4fd10f Mon Sep 17 00:00:00 2001
+From 9b01dd94bc8ee726f1e105c431761fcc83760021 Mon Sep 17 00:00:00 2001
 From: Devarshi Bhatt <devarshimb@google.com>
 Date: Wed, 17 Jun 2026 20:59:08 -0700
-Subject: [PATCH 36/49] Add size validation and trimming for ShortcutInfo
+Subject: [PATCH 36/51] Add size validation and trimming for ShortcutInfo
  objects.
 
 Introduces a maximum allowed size for a single ShortcutInfo object when parcelled (32KB). A new method `validateShortcutSize` is added to check this limit by writing the ShortcutInfo to a Parcel and checking its data size. If the shortcut size exceeds the limit, try to trim the Person array and Extras to get it under the limit. If the size still exceeds after trimming, drop the shortcut. This validation is applied to setDynamicShortcuts, addDynamicShortcuts, updateShortcuts, and pushDynamicShortcut to prevent apps from creating excessively large shortcuts.
@@ -660,5 +660,5 @@ index 000000000000..646a4bb55c6a
 +    }
 +}
 -- 
-2.55.0
+2.56.0
 

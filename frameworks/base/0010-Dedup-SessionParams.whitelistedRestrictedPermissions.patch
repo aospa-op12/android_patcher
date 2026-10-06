@@ -1,7 +1,7 @@
-From 51e5f9fd743c180c7d82f164a671fdb918c02957 Mon Sep 17 00:00:00 2001
+From b9cc69cdc610f3e7f632206bdcb83ea94b16eaed Mon Sep 17 00:00:00 2001
 From: William Loh <wloh@google.com>
 Date: Thu, 2 Apr 2026 15:58:15 -0700
-Subject: [PATCH 10/49] Dedup SessionParams.whitelistedRestrictedPermissions
+Subject: [PATCH 10/51] Dedup SessionParams.whitelistedRestrictedPermissions
 
 Even though SessionParam.whitelistedRestrictedPermissions is a hiden API
 it's still possible to directly set it using reflection.
@@ -37,5 +37,5 @@ index 5cf011289c52..b102c0f71aa5 100644
                      mPm.getAllPlatformRestrictedPermissions());
          }
 -- 
-2.55.0
+2.56.0
 

@@ -1,7 +1,7 @@
-From e98c6d4a0ab40bdb48595a6dd970aa1c4059f6f9 Mon Sep 17 00:00:00 2001
+From 3f6da05e71e693d6a6028b5f3dff65d87516225a Mon Sep 17 00:00:00 2001
 From: Duy Truong <duytruong@google.com>
 Date: Sat, 23 May 2026 01:14:32 -0700
-Subject: [PATCH 42/49] Use byte count rather than string length for NMS
+Subject: [PATCH 42/51] Use byte count rather than string length for NMS
  component name check
 
 Bug: 505067993
@@ -53,5 +53,5 @@ index ccaa70c90a1e..ef0f577ee1a6 100644
      public void testSetListenerAccessForUser_revokeWithNameTooLong_okay() throws Exception {
          UserHandle user = UserHandle.of(mContext.getUserId() + 10);
 -- 
-2.55.0
+2.56.0
 

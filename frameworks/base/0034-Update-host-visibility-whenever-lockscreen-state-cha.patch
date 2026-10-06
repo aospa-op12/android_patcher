@@ -1,7 +1,7 @@
-From 89f2e50c0c2b75d9eeb6bf56e9ca3d2da26261c6 Mon Sep 17 00:00:00 2001
+From e0de7663de4ee17e8d12d79fd8ae18a775de8d36 Mon Sep 17 00:00:00 2001
 From: Michael Mikhail <michaelmikhil@google.com>
 Date: Thu, 23 Apr 2026 23:15:52 +0000
-Subject: [PATCH 34/49] Update host visibility whenever lockscreen state
+Subject: [PATCH 34/51] Update host visibility whenever lockscreen state
  changes
 
 Flag: EXEMPT BUGFIX
@@ -314,5 +314,5 @@ index 5799e8886bd6..b3b7b027bbf3 100644
      }
  
 -- 
-2.55.0
+2.56.0
 

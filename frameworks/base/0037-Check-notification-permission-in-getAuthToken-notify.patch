@@ -1,7 +1,7 @@
-From 11f88c175b56364bfe54102356bca8054a8ef4ae Mon Sep 17 00:00:00 2001
+From f2c62f5050ca768a24bac9f23a8171992f913b04 Mon Sep 17 00:00:00 2001
 From: Dmitry Dementyev <dementyev@google.com>
 Date: Tue, 2 Jun 2026 12:12:51 -0700
-Subject: [PATCH 37/49] Check notification permission in
+Subject: [PATCH 37/51] Check notification permission in
  getAuthToken(notifyOnAuthFailure).
 
 Test: manual
@@ -49,5 +49,5 @@ index 22a69268baa4..9ebadbe80361 100644
                      }
                      super.onResult(result);
 -- 
-2.55.0
+2.56.0
 

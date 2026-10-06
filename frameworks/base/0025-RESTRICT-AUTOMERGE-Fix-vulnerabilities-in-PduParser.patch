@@ -1,7 +1,7 @@
-From d28b74956921ac0948768c54f36f15fbe46a621b Mon Sep 17 00:00:00 2001
+From 8c6bd11bd1563481588b4b3302d78879a73251f3 Mon Sep 17 00:00:00 2001
 From: Thomas Nguyen <tnd@google.com>
 Date: Wed, 17 Jun 2026 23:22:42 +0000
-Subject: [PATCH 25/49] RESTRICT AUTOMERGE: Fix vulnerabilities in PduParser
+Subject: [PATCH 25/51] RESTRICT AUTOMERGE: Fix vulnerabilities in PduParser
 
 Fix security issues in PduParser where malformed multipart alternative PDUs
 can trigger NullPointerException, ArrayIndexOutOfBoundsException, OutOfMemoryError,
@@ -164,5 +164,5 @@ index 000000000000..08f313249878
 +    }
 +}
 -- 
-2.55.0
+2.56.0
 

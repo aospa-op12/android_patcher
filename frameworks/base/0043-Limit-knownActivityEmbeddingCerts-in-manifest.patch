@@ -1,7 +1,7 @@
-From 6f4886499c1f2d4251c9119d4225a6120b3e66ca Mon Sep 17 00:00:00 2001
+From b597525fef68d0a079e655d1a210fad3a5a13659 Mon Sep 17 00:00:00 2001
 From: William Loh <wloh@google.com>
 Date: Wed, 13 May 2026 16:33:36 -0700
-Subject: [PATCH 43/49] Limit knownActivityEmbeddingCerts in manifest
+Subject: [PATCH 43/51] Limit knownActivityEmbeddingCerts in manifest
 
 Enforce manifest validation limits on knownActivityEmbeddingCerts to prevent
 manifest bloat and potential performance degradation during signature
@@ -96,5 +96,5 @@ index 26822c649db7..d846d0d334e6 100644
      }
  }
 -- 
-2.55.0
+2.56.0
 

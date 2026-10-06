@@ -1,7 +1,7 @@
-From 5ed15cd8a5ad557df87e2680870b06fa9f3b6731 Mon Sep 17 00:00:00 2001
+From aa08a7fef4438474c93b653ccd44de29a630470c Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Jakub=20Paw=C5=82owski?= <jpawlowski@google.com>
 Date: Fri, 19 Jun 2026 10:38:34 +0000
-Subject: [PATCH 12/12] GATT: Fix notifications sent to remote device without
+Subject: [PATCH 12/13] GATT: Fix notifications sent to remote device without
  security checks
 
 Currently, every notification/indication would be send by stack without any security checks.
@@ -748,5 +748,5 @@ index a3f7f9377ed..7b0c04050b6 100644
                                          uint16_t /*handle*/, tGATT_SEC_FLAG /*sec_flag*/,
                                          uint8_t /*key_size*/) {
 -- 
-2.55.0
+2.56.0
 
